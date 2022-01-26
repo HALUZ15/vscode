@@ -3,55 +3,59 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { localize } from 'vs/nls';
 import { VSBuffer } from 'vs/base/common/buffer';
 import { CancellationToken } from 'vs/base/common/cancellation';
 import { KeyCode, KeyMod } from 'vs/base/common/keyCodes';
-import { Disposable } from 'vs/base/common/lifecycle';
+import { Disposable, IDisposable } from 'vs/base/common/lifecycle';
 import { parse } from 'vs/base/common/marshalling';
+import { Schemas } from 'vs/base/common/network';
+import { isFalsyOrWhitespace } from 'vs/base/common/strings';
 import { assertType } from 'vs/base/common/types';
 import { URI } from 'vs/base/common/uri';
 import { IBulkEditService } from 'vs/editor/browser/services/bulkEditService';
 import { CodeEditorWidget } from 'vs/editor/browser/widget/codeEditorWidget';
+import { EditOperation } from 'vs/editor/common/core/editOperation';
+import { PLAINTEXT_LANGUAGE_ID } from 'vs/editor/common/languages/modesRegistry';
+import { ITextModel } from 'vs/editor/common/model';
+import { IModelService } from 'vs/editor/common/services/model';
+import { ITextModelContentProvider, ITextModelService } from 'vs/editor/common/services/resolverService';
+import { peekViewBorder /*, peekViewEditorBackground, peekViewResultsBackground */ } from 'vs/editor/contrib/peekView/browser/peekView';
+import { Context as SuggestContext } from 'vs/editor/contrib/suggest/browser/suggest';
+import { localize } from 'vs/nls';
 import { Action2, MenuId, registerAction2 } from 'vs/platform/actions/common/actions';
 import { ContextKeyExpr } from 'vs/platform/contextkey/common/contextkey';
+import { EditorActivation } from 'vs/platform/editor/common/editor';
 import { ExtensionIdentifier } from 'vs/platform/extensions/common/extensions';
 import { SyncDescriptor } from 'vs/platform/instantiation/common/descriptors';
+import { registerSingleton } from 'vs/platform/instantiation/common/extensions';
 import { IInstantiationService, ServicesAccessor } from 'vs/platform/instantiation/common/instantiation';
+import { KeybindingWeight } from 'vs/platform/keybinding/common/keybindingsRegistry';
 import { Registry } from 'vs/platform/registry/common/platform';
+import { contrastBorder, listInactiveSelectionBackground, registerColor, transparent } from 'vs/platform/theme/common/colorRegistry';
+import { registerThemingParticipant } from 'vs/platform/theme/common/themeService';
 import { EditorPaneDescriptor, IEditorPaneRegistry } from 'vs/workbench/browser/editor';
 import { Extensions as WorkbenchExtensions, IWorkbenchContribution, IWorkbenchContributionsRegistry } from 'vs/workbench/common/contributions';
 import { EditorExtensions, EditorsOrder, IEditorSerializer } from 'vs/workbench/common/editor';
 import { EditorInput } from 'vs/workbench/common/editor/editorInput';
-import { columnToEditorGroup } from 'vs/workbench/services/editor/common/editorGroupColumn';
-import { InteractiveEditor } from 'vs/workbench/contrib/interactive/browser/interactiveEditor';
-import { InteractiveEditorInput } from 'vs/workbench/contrib/interactive/browser/interactiveEditorInput';
-import { NOTEBOOK_EDITOR_WIDGET_ACTION_WEIGHT } from 'vs/workbench/contrib/notebook/browser/controller/coreActions';
-import { NotebookEditorWidget } from 'vs/workbench/contrib/notebook/browser/notebookEditorWidget';
-import { CellEditType, CellKind, ICellOutput } from 'vs/workbench/contrib/notebook/common/notebookCommon';
-import { INotebookContentProvider, INotebookService } from 'vs/workbench/contrib/notebook/common/notebookService';
-import { IEditorService } from 'vs/workbench/services/editor/common/editorService';
-import { LifecyclePhase } from 'vs/workbench/services/lifecycle/common/lifecycle';
-import { ResourceNotebookCellEdit } from 'vs/workbench/contrib/bulkEdit/browser/bulkCellEdits';
-import { Schemas } from 'vs/base/common/network';
-import { IEditorGroupsService } from 'vs/workbench/services/editor/common/editorGroupsService';
-import { registerSingleton } from 'vs/platform/instantiation/common/extensions';
-import { IInteractiveHistoryService, InteractiveHistoryService } from 'vs/workbench/contrib/interactive/browser/interactiveHistoryService';
-import { KeybindingWeight } from 'vs/platform/keybinding/common/keybindingsRegistry';
-import { INTERACTIVE_INPUT_CURSOR_BOUNDARY } from 'vs/workbench/contrib/interactive/browser/interactiveCommon';
-import { INotebookKernelService } from 'vs/workbench/contrib/notebook/common/notebookKernelService';
-import { IInteractiveDocumentService, InteractiveDocumentService } from 'vs/workbench/contrib/interactive/browser/interactiveDocumentService';
-import { IEditorResolverService, RegisteredEditorPriority } from 'vs/workbench/services/editor/common/editorResolverService';
-import { Context as SuggestContext } from 'vs/editor/contrib/suggest/suggest';
-import { EditorActivation } from 'vs/platform/editor/common/editor';
-import { contrastBorder, listInactiveSelectionBackground, registerColor, transparent } from 'vs/platform/theme/common/colorRegistry';
 // import { Color } from 'vs/base/common/color';
 import { PANEL_BORDER } from 'vs/workbench/common/theme';
-import { registerThemingParticipant } from 'vs/platform/theme/common/themeService';
-import { peekViewBorder /*, peekViewEditorBackground, peekViewResultsBackground */ } from 'vs/editor/contrib/peekView/peekView';
+import { ResourceNotebookCellEdit } from 'vs/workbench/contrib/bulkEdit/browser/bulkCellEdits';
+import { INTERACTIVE_INPUT_CURSOR_BOUNDARY } from 'vs/workbench/contrib/interactive/browser/interactiveCommon';
+import { IInteractiveDocumentService, InteractiveDocumentService } from 'vs/workbench/contrib/interactive/browser/interactiveDocumentService';
+import { InteractiveEditor } from 'vs/workbench/contrib/interactive/browser/interactiveEditor';
+import { InteractiveEditorInput } from 'vs/workbench/contrib/interactive/browser/interactiveEditorInput';
+import { IInteractiveHistoryService, InteractiveHistoryService } from 'vs/workbench/contrib/interactive/browser/interactiveHistoryService';
+import { NOTEBOOK_EDITOR_WIDGET_ACTION_WEIGHT } from 'vs/workbench/contrib/notebook/browser/controller/coreActions';
+import { NotebookEditorWidget } from 'vs/workbench/contrib/notebook/browser/notebookEditorWidget';
 import * as icons from 'vs/workbench/contrib/notebook/browser/notebookIcons';
-import { isFalsyOrWhitespace } from 'vs/base/common/strings';
-import { EditOperation } from 'vs/editor/common/core/editOperation';
+import { CellEditType, CellKind, ICellOutput } from 'vs/workbench/contrib/notebook/common/notebookCommon';
+import { INotebookKernelService } from 'vs/workbench/contrib/notebook/common/notebookKernelService';
+import { INotebookContentProvider, INotebookService } from 'vs/workbench/contrib/notebook/common/notebookService';
+import { columnToEditorGroup } from 'vs/workbench/services/editor/common/editorGroupColumn';
+import { IEditorGroupsService } from 'vs/workbench/services/editor/common/editorGroupsService';
+import { IEditorResolverService, RegisteredEditorPriority } from 'vs/workbench/services/editor/common/editorResolverService';
+import { IEditorService } from 'vs/workbench/services/editor/common/editorService';
+import { LifecyclePhase } from 'vs/workbench/services/lifecycle/common/lifecycle';
 
 
 Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
@@ -185,7 +189,7 @@ export class InteractiveDocumentContribution extends Disposable implements IWork
 		editorResolverService.registerEditor(
 			`${Schemas.vscodeInteractiveInput}:/**`,
 			{
-				id: InteractiveEditor.ID,
+				id: InteractiveEditorInput.ID,
 				label: 'Interactive Editor',
 				priority: RegisteredEditorPriority.exclusive
 			},
@@ -202,7 +206,7 @@ export class InteractiveDocumentContribution extends Disposable implements IWork
 		editorResolverService.registerEditor(
 			`*.interactive`,
 			{
-				id: InteractiveEditor.ID,
+				id: InteractiveEditorInput.ID,
 				label: 'Interactive Editor',
 				priority: RegisteredEditorPriority.exclusive
 			},
@@ -218,8 +222,35 @@ export class InteractiveDocumentContribution extends Disposable implements IWork
 	}
 }
 
+class InteractiveInputContentProvider implements ITextModelContentProvider {
+
+	private readonly _registration: IDisposable;
+
+	constructor(
+		@ITextModelService textModelService: ITextModelService,
+		@IModelService private readonly _modelService: IModelService,
+	) {
+		this._registration = textModelService.registerTextModelContentProvider(Schemas.vscodeInteractiveInput, this);
+	}
+
+	dispose(): void {
+		this._registration.dispose();
+	}
+
+	async provideTextContent(resource: URI): Promise<ITextModel | null> {
+		const existing = this._modelService.getModel(resource);
+		if (existing) {
+			return existing;
+		}
+		let result: ITextModel | null = this._modelService.createModel('', null, resource, false);
+		return result;
+	}
+}
+
+
 const workbenchContributionsRegistry = Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench);
 workbenchContributionsRegistry.registerWorkbenchContribution(InteractiveDocumentContribution, LifecyclePhase.Starting);
+workbenchContributionsRegistry.registerWorkbenchContribution(InteractiveInputContentProvider, LifecyclePhase.Starting);
 
 export class InteractiveEditorSerializer implements IEditorSerializer {
 	canSerialize(): boolean {
@@ -250,7 +281,7 @@ export class InteractiveEditorSerializer implements IEditorSerializer {
 	}
 }
 
-// Registry.as<IEditorInputFactoryRegistry>(EditorExtensions.EditorInputFactories).registerEditorInputSerializer(
+// Registry.as<EditorInputFactoryRegistry>(EditorExtensions.EditorInputFactories).registerEditorInputSerializer(
 // 	InteractiveEditorInput.ID,
 // 	InteractiveEditorSerializer
 // );
@@ -403,7 +434,7 @@ registerAction2(class extends Action2 {
 			const notebookDocument = editorControl.notebookEditor.textModel;
 			const textModel = editorControl.codeEditor.getModel();
 			const activeKernel = editorControl.notebookEditor.activeKernel;
-			const language = activeKernel?.supportedLanguages[0] ?? 'plaintext';
+			const language = activeKernel?.supportedLanguages[0] ?? PLAINTEXT_LANGUAGE_ID;
 
 			if (notebookDocument && textModel) {
 				const index = notebookDocument.length;
@@ -416,6 +447,12 @@ registerAction2(class extends Action2 {
 				historyService.addToHistory(notebookDocument.uri, '');
 				textModel.setValue('');
 
+				const collapseState = editorControl.notebookEditor.notebookOptions.getLayoutConfiguration().interactiveWindowCollapseCodeCells === 'fromEditor' ?
+					{
+						inputCollapsed: false,
+						outputCollapsed: false
+					} :
+					undefined;
 				await bulkEditService.apply([
 					new ResourceNotebookCellEdit(notebookDocument.uri,
 						{
@@ -428,7 +465,8 @@ registerAction2(class extends Action2 {
 								language,
 								source: value,
 								outputs: [],
-								metadata: {}
+								metadata: {},
+								collapseState
 							}]
 						}
 					)
@@ -546,6 +584,65 @@ registerAction2(class extends Action2 {
 	}
 });
 
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: 'interactive.scrollToTop',
+			title: localize('interactiveScrollToTop', 'Scroll to Top'),
+			keybinding: {
+				when: ContextKeyExpr.equals('resourceScheme', Schemas.vscodeInteractive),
+				primary: KeyMod.CtrlCmd | KeyCode.Home,
+				mac: { primary: KeyMod.CtrlCmd | KeyCode.UpArrow },
+				weight: KeybindingWeight.WorkbenchContrib
+			},
+			category: 'Interactive',
+		});
+	}
+
+	async run(accessor: ServicesAccessor): Promise<void> {
+		const editorService = accessor.get(IEditorService);
+		const editorControl = editorService.activeEditorPane?.getControl() as { notebookEditor: NotebookEditorWidget | undefined, codeEditor: CodeEditorWidget; } | undefined;
+
+		if (editorControl && editorControl.notebookEditor && editorControl.codeEditor) {
+			if (editorControl.notebookEditor.getLength() === 0) {
+				return;
+			}
+
+			editorControl.notebookEditor.revealCellRangeInView({ start: 0, end: 1 });
+		}
+	}
+});
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: 'interactive.scrollToBottom',
+			title: localize('interactiveScrollToBottom', 'Scroll to Bottom'),
+			keybinding: {
+				when: ContextKeyExpr.equals('resourceScheme', Schemas.vscodeInteractive),
+				primary: KeyMod.CtrlCmd | KeyCode.End,
+				mac: { primary: KeyMod.CtrlCmd | KeyCode.DownArrow },
+				weight: KeybindingWeight.WorkbenchContrib
+			},
+			category: 'Interactive',
+		});
+	}
+
+	async run(accessor: ServicesAccessor): Promise<void> {
+		const editorService = accessor.get(IEditorService);
+		const editorControl = editorService.activeEditorPane?.getControl() as { notebookEditor: NotebookEditorWidget | undefined, codeEditor: CodeEditorWidget; } | undefined;
+
+		if (editorControl && editorControl.notebookEditor && editorControl.codeEditor) {
+			if (editorControl.notebookEditor.getLength() === 0) {
+				return;
+			}
+
+			const len = editorControl.notebookEditor.getLength();
+			editorControl.notebookEditor.revealCellRangeInView({ start: len - 1, end: len });
+		}
+	}
+});
 
 registerThemingParticipant((theme) => {
 	registerColor('interactive.activeCodeBorder', {

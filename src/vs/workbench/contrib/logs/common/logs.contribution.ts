@@ -15,18 +15,18 @@ import { IWorkbenchEnvironmentService } from 'vs/workbench/services/environment/
 import { IFileService, whenProviderRegistered } from 'vs/platform/files/common/files';
 import { URI } from 'vs/base/common/uri';
 import { IOutputChannelRegistry, Extensions as OutputExt } from 'vs/workbench/services/output/common/output';
-import { Disposable } from 'vs/base/common/lifecycle';
+import { Disposable, toDisposable } from 'vs/base/common/lifecycle';
 import { ILogService, LogLevel } from 'vs/platform/log/common/log';
 import { LifecyclePhase } from 'vs/workbench/services/lifecycle/common/lifecycle';
 import { isWeb } from 'vs/base/common/platform';
 import { IInstantiationService, ServicesAccessor } from 'vs/platform/instantiation/common/instantiation';
 import { LogsDataCleaner } from 'vs/workbench/contrib/logs/common/logsDataCleaner';
 import { IOutputService } from 'vs/workbench/contrib/output/common/output';
-import { getTelemetryLevel } from 'vs/platform/telemetry/common/telemetryUtils';
+import { supportsTelemetry } from 'vs/platform/telemetry/common/telemetryUtils';
 import { IProductService } from 'vs/platform/product/common/productService';
-import { timeout } from 'vs/base/common/async';
-import { getErrorMessage } from 'vs/base/common/errors';
-import { TelemetryLevel } from 'vs/platform/telemetry/common/telemetry';
+import { createCancelablePromise, timeout } from 'vs/base/common/async';
+import { canceled, getErrorMessage, isCancellationError } from 'vs/base/common/errors';
+import { CancellationToken } from 'vs/base/common/cancellation';
 
 const workbenchActionsRegistry = Registry.as<IWorkbenchActionRegistry>(WorkbenchActionExtensions.WorkbenchActions);
 workbenchActionsRegistry.registerWorkbenchAction(SyncActionDescriptor.from(SetLogLevelAction), 'Developer: Set Log Level...', CATEGORIES.Developer.value);
@@ -54,7 +54,7 @@ class LogOutputChannels extends Disposable implements IWorkbenchContribution {
 		this.registerLogChannel(Constants.rendererLogChannelId, nls.localize('rendererLog', "Window"), this.environmentService.logFile);
 
 		const registerTelemetryChannel = () => {
-			if (getTelemetryLevel(this.productService, this.environmentService) >= TelemetryLevel.LOG && this.logService.getLevel() === LogLevel.Trace) {
+			if (supportsTelemetry(this.productService, this.environmentService) && this.logService.getLevel() === LogLevel.Trace) {
 				this.registerLogChannel(Constants.telemetryLogChannelId, nls.localize('telemetryLog', "Telemetry"), this.environmentService.telemetryLogResource);
 				return true;
 			}
@@ -100,24 +100,31 @@ class LogOutputChannels extends Disposable implements IWorkbenchContribution {
 		await whenProviderRegistered(file, this.fileService);
 		const outputChannelRegistry = Registry.as<IOutputChannelRegistry>(OutputExt.OutputChannels);
 		try {
-			await this.whenFileExists(file, 1);
+			const promise = createCancelablePromise(token => this.whenFileExists(file, 1, token));
+			this._register(toDisposable(() => promise.cancel()));
+			await promise;
 			outputChannelRegistry.registerChannel({ id, label, file, log: true });
 		} catch (error) {
-			this.logService.error('Error while registering log channel', file.toString(), getErrorMessage(error));
+			if (!isCancellationError(error)) {
+				this.logService.error('Error while registering log channel', file.toString(), getErrorMessage(error));
+			}
 		}
 	}
 
-	private async whenFileExists(file: URI, trial: number): Promise<void> {
+	private async whenFileExists(file: URI, trial: number, token: CancellationToken): Promise<void> {
 		const exists = await this.fileService.exists(file);
 		if (exists) {
 			return;
+		}
+		if (token.isCancellationRequested) {
+			throw canceled();
 		}
 		if (trial > 10) {
 			throw new Error(`Timed out while waiting for file to be created`);
 		}
 		this.logService.debug(`[Registering Log Channel] File does not exist. Waiting for 1s to retry.`, file.toString());
-		await timeout(1000);
-		await this.whenFileExists(file, trial + 1);
+		await timeout(1000, token);
+		await this.whenFileExists(file, trial + 1, token);
 	}
 
 }

@@ -146,6 +146,10 @@
 	margin-bottom: 0;
 }
 
+.monaco-editor .zone-widget.test-output-peek .preview-text a {
+	cursor: pointer;
+}
+
 /** -- filter  */
 .testing-filter-action-bar {
 	flex-shrink: 0;
@@ -204,7 +208,6 @@
 
 .test-message-inline-content {
 	font-family: var(--testMessageDecorationFontFamily);
-	padding: 0px 12px 0px 24px;
 	font-size: var(--testMessageDecorationFontSize);
 	cursor: pointer;
 }

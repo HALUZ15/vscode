@@ -22,7 +22,7 @@ import { IConfigurationService } from 'vs/platform/configuration/common/configur
 import { IEditorGroupsService } from 'vs/workbench/services/editor/common/editorGroupsService';
 import { getCodeEditor, ICodeEditor } from 'vs/editor/browser/editorBrowser';
 import { getExcludes, ISearchConfiguration, SEARCH_EXCLUDE_CONFIG } from 'vs/workbench/services/search/common/search';
-import { ICursorPositionChangedEvent } from 'vs/editor/common/controller/cursorEvents';
+import { ICursorPositionChangedEvent } from 'vs/editor/common/cursor/cursorEvents';
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
 import { EditorServiceImpl } from 'vs/workbench/browser/parts/editor/editor';
 import { IWorkbenchLayoutService } from 'vs/workbench/services/layout/browser/layoutService';
@@ -37,7 +37,7 @@ import { onUnexpectedError } from 'vs/base/common/errors';
 import { IdleValue } from 'vs/base/common/async';
 import { ResourceGlobMatcher } from 'vs/workbench/common/resources';
 import { IPathService } from 'vs/workbench/services/path/common/pathService';
-import { IUriIdentityService } from 'vs/workbench/services/uriIdentity/common/uriIdentity';
+import { IUriIdentityService } from 'vs/platform/uriIdentity/common/uriIdentity';
 import { ILifecycleService, LifecyclePhase } from 'vs/workbench/services/lifecycle/common/lifecycle';
 
 /**
@@ -59,7 +59,7 @@ class TextEditorState {
 
 	justifiesNewPushState(other: TextEditorState, event?: ICursorPositionChangedEvent): boolean {
 		if (event?.source === 'api') {
-			return true; // always let API source win (e.g. "Go to definition" should add a history entry)
+			return true; // always let API source win (e.g. "Go to definition" should add a history entry)
 		}
 
 		if (!this._editorInput.matches(other._editorInput)) {
@@ -113,7 +113,7 @@ export class HistoryService extends Disposable implements IHistoryService {
 	private readonly activeEditorListeners = this._register(new DisposableStore());
 	private lastActiveEditor?: IEditorIdentifier;
 
-	private readonly editorStackListeners = new Map();
+	private readonly editorStackListeners = new Map<EditorInput, DisposableStore>();
 
 	constructor(
 		@IEditorService private readonly editorService: EditorServiceImpl,
@@ -386,23 +386,27 @@ export class HistoryService extends Disposable implements IHistoryService {
 		this.updateContextKeys();
 	}
 
-	private navigate(): void {
+	private async navigate(): Promise<void> {
 		this.navigatingInStack = true;
 
 		const navigateToStackEntry = this.navigationStack[this.navigationStackIndex];
 
-		this.doNavigate(navigateToStackEntry).finally(() => { this.navigatingInStack = false; });
+		try {
+			await this.doNavigate(navigateToStackEntry);
+		} finally {
+			this.navigatingInStack = false;
+		}
 	}
 
 	private doNavigate(location: IStackEntry): Promise<IEditorPane | undefined> {
 		const options: ITextEditorOptions = {
-			revealIfOpened: true, // support to navigate across editor groups,
+			revealIfOpened: true, // support to navigate across editor groups
 			selection: location.selection,
 			selectionRevealType: TextEditorSelectionRevealType.CenterIfOutsideViewport
 		};
 
 		if (isEditorInput(location.editor)) {
-			return this.editorGroupService.activeGroup.openEditor(location.editor, options);
+			return this.editorService.openEditor(location.editor, options);
 		}
 
 		return this.editorService.openEditor({
@@ -692,7 +696,7 @@ export class HistoryService extends Disposable implements IHistoryService {
 				return false;
 			}
 
-			if (this.lifecycleService.phase >= LifecyclePhase.Restored && !this.fileService.canHandleResource(inputResource)) {
+			if (this.lifecycleService.phase >= LifecyclePhase.Restored && !this.fileService.hasProvider(inputResource)) {
 				return false; // make sure to only check this when workbench has restored (for https://github.com/microsoft/vscode/issues/48275)
 			}
 
@@ -886,7 +890,7 @@ export class HistoryService extends Disposable implements IHistoryService {
 
 	private history: Array<EditorInput | IResourceEditorInput> | undefined = undefined;
 
-	private readonly editorHistoryListeners = new Map();
+	private readonly editorHistoryListeners = new Map<EditorInput, DisposableStore>();
 
 	private readonly resourceExcludeMatcher = this._register(new IdleValue(() => {
 		const matcher = this._register(this.instantiationService.createInstance(
@@ -1258,7 +1262,7 @@ export class HistoryService extends Disposable implements IHistoryService {
 		this.doNavigateInRecentlyUsedEditorsStack(stack[index], groupId);
 	}
 
-	private doNavigateInRecentlyUsedEditorsStack(editorIdentifier: IEditorIdentifier | undefined, groupId?: GroupIdentifier): void {
+	private async doNavigateInRecentlyUsedEditorsStack(editorIdentifier: IEditorIdentifier | undefined, groupId?: GroupIdentifier): Promise<void> {
 		if (editorIdentifier) {
 			const acrossGroups = typeof groupId !== 'number' || !this.editorGroupService.getGroup(groupId);
 
@@ -1269,13 +1273,15 @@ export class HistoryService extends Disposable implements IHistoryService {
 			}
 
 			const group = this.editorGroupService.getGroup(editorIdentifier.groupId) ?? this.editorGroupService.activeGroup;
-			group.openEditor(editorIdentifier.editor).finally(() => {
+			try {
+				await group.openEditor(editorIdentifier.editor);
+			} finally {
 				if (acrossGroups) {
 					this.navigatingInRecentlyUsedEditorsStack = false;
 				} else {
 					this.navigatingInRecentlyUsedEditorsInGroupStack = false;
 				}
-			});
+			}
 		}
 	}
 

@@ -17,7 +17,7 @@ import { ILabelService } from 'vs/platform/label/common/label';
 import { ModifierKeyEmitter, trackFocus } from 'vs/base/browser/dom';
 import { Disposable } from 'vs/base/common/lifecycle';
 import { URI } from 'vs/base/common/uri';
-import { IWorkbenchEnvironmentService } from 'vs/workbench/services/environment/common/environmentService';
+import { IBrowserWorkbenchEnvironmentService } from 'vs/workbench/services/environment/browser/environmentService';
 import { memoize } from 'vs/base/common/decorators';
 import { parseLineAndColumnAware } from 'vs/base/common/extpath';
 import { IWorkspaceFolderCreationData } from 'vs/platform/workspaces/common/workspaces';
@@ -32,7 +32,6 @@ import Severity from 'vs/base/common/severity';
 import { IDialogService } from 'vs/platform/dialogs/common/dialogs';
 import { DomEmitter } from 'vs/base/browser/event';
 import { isUndefined } from 'vs/base/common/types';
-import { IStorageService, WillSaveStateReason } from 'vs/platform/storage/common/storage';
 
 /**
  * A workspace to open in the workbench can either be:
@@ -105,12 +104,11 @@ export class BrowserHostService extends Disposable implements IHostService {
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@IFileService private readonly fileService: IFileService,
 		@ILabelService private readonly labelService: ILabelService,
-		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
+		@IBrowserWorkbenchEnvironmentService private readonly environmentService: IBrowserWorkbenchEnvironmentService,
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@ILifecycleService private readonly lifecycleService: BrowserLifecycleService,
 		@ILogService private readonly logService: ILogService,
-		@IDialogService private readonly dialogService: IDialogService,
-		@IStorageService private readonly storageService: IStorageService
+		@IDialogService private readonly dialogService: IDialogService
 	) {
 		super();
 
@@ -138,24 +136,17 @@ export class BrowserHostService extends Disposable implements IHostService {
 
 	private onBeforeShutdown(e: BeforeShutdownEvent): void {
 
-		// Optimistically trigger a UI state flush
-		// without waiting for it. The browser does
-		// not guarantee that this is being executed
-		// but if a dialog opens, we have a chance
-		// to succeed.
-		this.storageService.flush(WillSaveStateReason.SHUTDOWN);
-
 		switch (this.shutdownReason) {
 
 			// Unknown / Keyboard shows veto depending on setting
 			case HostShutdownReason.Unknown:
-			case HostShutdownReason.Keyboard:
+			case HostShutdownReason.Keyboard: {
 				const confirmBeforeClose = this.configurationService.getValue('window.confirmBeforeClose');
 				if (confirmBeforeClose === 'always' || (confirmBeforeClose === 'keyboardOnly' && this.shutdownReason === HostShutdownReason.Keyboard)) {
 					e.veto(true, 'veto.confirmBeforeClose');
 				}
 				break;
-
+			}
 			// Api never shows veto
 			case HostShutdownReason.Api:
 				break;
@@ -469,10 +460,7 @@ export class BrowserHostService extends Disposable implements IHostService {
 		this.shutdownReason = HostShutdownReason.Api;
 
 		// Signal shutdown reason to lifecycle
-		this.lifecycleService.withExpectedShutdown(reason);
-
-		// Ensure UI state is persisted
-		await this.storageService.flush(WillSaveStateReason.SHUTDOWN);
+		return this.lifecycleService.withExpectedShutdown(reason);
 	}
 
 	//#endregion

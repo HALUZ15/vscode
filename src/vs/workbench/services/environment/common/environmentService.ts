@@ -6,7 +6,6 @@
 import { refineServiceDecorator } from 'vs/platform/instantiation/common/instantiation';
 import { IWindowConfiguration } from 'vs/platform/windows/common/windows';
 import { IEnvironmentService } from 'vs/platform/environment/common/environment';
-import type { IWorkbenchConstructionOptions as IWorkbenchOptions } from 'vs/workbench/workbench.web.api';
 import { URI } from 'vs/base/common/uri';
 
 export const IWorkbenchEnvironmentService = refineServiceDecorator<IEnvironmentService, IWorkbenchEnvironmentService>(IEnvironmentService);
@@ -25,8 +24,6 @@ export interface IWorkbenchEnvironmentService extends IEnvironmentService {
 	//       ENVIRONMENT SERVICE
 	// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-	readonly options?: IWorkbenchOptions;
-
 	readonly remoteAuthority?: string;
 
 	readonly logFile: URI;
@@ -41,6 +38,8 @@ export interface IWorkbenchEnvironmentService extends IEnvironmentService {
 	readonly skipWelcome: boolean;
 
 	readonly debugRenderer: boolean;
+
+	readonly disableWorkspaceTrust: boolean;
 
 	/**
 	 * @deprecated this property will go away eventually as it

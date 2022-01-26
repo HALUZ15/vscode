@@ -30,15 +30,15 @@ import { Range } from 'vs/editor/common/core/range';
 import { IDecorationOptions } from 'vs/editor/common/editorCommon';
 import { EditorContextKeys } from 'vs/editor/common/editorContextKeys';
 import { ITextModel } from 'vs/editor/common/model';
-import { CompletionContext, CompletionItem, CompletionItemInsertTextRule, CompletionItemKind, completionKindFromString, CompletionList, CompletionProviderRegistry } from 'vs/editor/common/modes';
-import { IModelService } from 'vs/editor/common/services/modelService';
-import { ITextResourcePropertiesService } from 'vs/editor/common/services/textResourceConfigurationService';
-import { SuggestController } from 'vs/editor/contrib/suggest/suggestController';
+import { CompletionContext, CompletionItem, CompletionItemInsertTextRule, CompletionItemKind, CompletionItemKinds, CompletionList, CompletionProviderRegistry } from 'vs/editor/common/languages';
+import { IModelService } from 'vs/editor/common/services/model';
+import { ITextResourcePropertiesService } from 'vs/editor/common/services/textResourceConfiguration';
+import { SuggestController } from 'vs/editor/contrib/suggest/browser/suggestController';
 import { localize } from 'vs/nls';
 import { createAndFillInContextMenuActions } from 'vs/platform/actions/browser/menuEntryActionViewItem';
 import { Action2, IMenu, IMenuService, MenuId, registerAction2 } from 'vs/platform/actions/common/actions';
-import { createAndBindHistoryNavigationWidgetScopedContextKeyService } from 'vs/platform/browser/contextScopedHistoryWidget';
-import { showHistoryKeybindingHint } from 'vs/platform/browser/historyWidgetKeybindingHint';
+import { createAndBindHistoryNavigationWidgetScopedContextKeyService } from 'vs/platform/history/browser/contextScopedHistoryWidget';
+import { showHistoryKeybindingHint } from 'vs/platform/history/browser/historyWidgetKeybindingHint';
 import { IClipboardService } from 'vs/platform/clipboard/common/clipboardService';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { ContextKeyExpr, IContextKey, IContextKeyService } from 'vs/platform/contextkey/common/contextkey';
@@ -143,78 +143,11 @@ export class Repl extends ViewPane implements IHistoryNavigationWidget {
 	}
 
 	private registerListeners(): void {
-		this._register(this.debugService.getViewModel().onDidFocusSession(async session => {
-			if (session) {
-				sessionsToIgnore.delete(session);
-				if (this.completionItemProvider) {
-					this.completionItemProvider.dispose();
-				}
-				if (session.capabilities.supportsCompletionsRequest) {
-					this.completionItemProvider = CompletionProviderRegistry.register({ scheme: DEBUG_SCHEME, pattern: '**/replinput', hasAccessToAllModels: true }, {
-						triggerCharacters: session.capabilities.completionTriggerCharacters || ['.'],
-						provideCompletionItems: async (_: ITextModel, position: Position, _context: CompletionContext, token: CancellationToken): Promise<CompletionList> => {
-							// Disable history navigation because up and down are used to navigate through the suggest widget
-							this.setHistoryNavigationEnablement(false);
+		if (this.debugService.getViewModel().focusedSession) {
+			this.onDidFocusSession(this.debugService.getViewModel().focusedSession);
+		}
 
-							const model = this.replInput.getModel();
-							if (model) {
-								const word = model.getWordAtPosition(position);
-								const overwriteBefore = word ? word.word.length : 0;
-								const text = model.getValue();
-								const focusedStackFrame = this.debugService.getViewModel().focusedStackFrame;
-								const frameId = focusedStackFrame ? focusedStackFrame.frameId : undefined;
-								const response = await session.completions(frameId, focusedStackFrame?.thread.threadId || 0, text, position, overwriteBefore, token);
-
-								const suggestions: CompletionItem[] = [];
-								const computeRange = (length: number) => Range.fromPositions(position.delta(0, -length), position);
-								if (response && response.body && response.body.targets) {
-									response.body.targets.forEach(item => {
-										if (item && item.label) {
-											let insertTextRules: CompletionItemInsertTextRule | undefined = undefined;
-											let insertText = item.text || item.label;
-											if (typeof item.selectionStart === 'number') {
-												// If a debug completion item sets a selection we need to use snippets to make sure the selection is selected #90974
-												insertTextRules = CompletionItemInsertTextRule.InsertAsSnippet;
-												const selectionLength = typeof item.selectionLength === 'number' ? item.selectionLength : 0;
-												const placeholder = selectionLength > 0 ? '${1:' + insertText.substr(item.selectionStart, selectionLength) + '}$0' : '$0';
-												insertText = insertText.substr(0, item.selectionStart) + placeholder + insertText.substr(item.selectionStart + selectionLength);
-											}
-
-											suggestions.push({
-												label: item.label,
-												insertText,
-												kind: completionKindFromString(item.type || 'property'),
-												filterText: (item.start && item.length) ? text.substr(item.start, item.length).concat(item.label) : undefined,
-												range: computeRange(item.length || overwriteBefore),
-												sortText: item.sortText,
-												insertTextRules
-											});
-										}
-									});
-								}
-
-								if (this.configurationService.getValue<IDebugConfiguration>('debug').console.historySuggestions) {
-									const history = this.history.getHistory();
-									history.forEach(h => suggestions.push({
-										label: h,
-										insertText: h,
-										kind: CompletionItemKind.Text,
-										range: computeRange(h.length),
-										sortText: 'ZZZ'
-									}));
-								}
-
-								return { suggestions };
-							}
-
-							return Promise.resolve({ suggestions: [] });
-						}
-					});
-				}
-			}
-
-			await this.selectSession();
-		}));
+		this._register(this.debugService.getViewModel().onDidFocusSession(async session => this.onDidFocusSession(session)));
 		this._register(this.debugService.onWillNewSession(async newSession => {
 			// Need to listen to output events for sessions which are not yet fully initialised
 			const input = this.tree.getInput();
@@ -279,6 +212,79 @@ export class Repl extends ViewPane implements IHistoryNavigationWidget {
 		}));
 	}
 
+	private async onDidFocusSession(session: IDebugSession | undefined): Promise<void> {
+		if (session) {
+			sessionsToIgnore.delete(session);
+			if (this.completionItemProvider) {
+				this.completionItemProvider.dispose();
+			}
+			if (session.capabilities.supportsCompletionsRequest) {
+				this.completionItemProvider = CompletionProviderRegistry.register({ scheme: DEBUG_SCHEME, pattern: '**/replinput', hasAccessToAllModels: true }, {
+					triggerCharacters: session.capabilities.completionTriggerCharacters || ['.'],
+					provideCompletionItems: async (_: ITextModel, position: Position, _context: CompletionContext, token: CancellationToken): Promise<CompletionList> => {
+						// Disable history navigation because up and down are used to navigate through the suggest widget
+						this.setHistoryNavigationEnablement(false);
+
+						const model = this.replInput.getModel();
+						if (model) {
+							const word = model.getWordAtPosition(position);
+							const overwriteBefore = word ? word.word.length : 0;
+							const text = model.getValue();
+							const focusedStackFrame = this.debugService.getViewModel().focusedStackFrame;
+							const frameId = focusedStackFrame ? focusedStackFrame.frameId : undefined;
+							const response = await session.completions(frameId, focusedStackFrame?.thread.threadId || 0, text, position, overwriteBefore, token);
+
+							const suggestions: CompletionItem[] = [];
+							const computeRange = (length: number) => Range.fromPositions(position.delta(0, -length), position);
+							if (response && response.body && response.body.targets) {
+								response.body.targets.forEach(item => {
+									if (item && item.label) {
+										let insertTextRules: CompletionItemInsertTextRule | undefined = undefined;
+										let insertText = item.text || item.label;
+										if (typeof item.selectionStart === 'number') {
+											// If a debug completion item sets a selection we need to use snippets to make sure the selection is selected #90974
+											insertTextRules = CompletionItemInsertTextRule.InsertAsSnippet;
+											const selectionLength = typeof item.selectionLength === 'number' ? item.selectionLength : 0;
+											const placeholder = selectionLength > 0 ? '${1:' + insertText.substring(item.selectionStart, item.selectionStart + selectionLength) + '}$0' : '$0';
+											insertText = insertText.substring(0, item.selectionStart) + placeholder + insertText.substring(item.selectionStart + selectionLength);
+										}
+
+										suggestions.push({
+											label: item.label,
+											insertText,
+											kind: CompletionItemKinds.fromString(item.type || 'property'),
+											filterText: (item.start && item.length) ? text.substring(item.start, item.start + item.length).concat(item.label) : undefined,
+											range: computeRange(item.length || overwriteBefore),
+											sortText: item.sortText,
+											insertTextRules
+										});
+									}
+								});
+							}
+
+							if (this.configurationService.getValue<IDebugConfiguration>('debug').console.historySuggestions) {
+								const history = this.history.getHistory();
+								history.forEach(h => suggestions.push({
+									label: h,
+									insertText: h,
+									kind: CompletionItemKind.Text,
+									range: computeRange(h.length),
+									sortText: 'ZZZ'
+								}));
+							}
+
+							return { suggestions };
+						}
+
+						return Promise.resolve({ suggestions: [] });
+					}
+				});
+			}
+		}
+
+		await this.selectSession();
+	}
+
 	getFilterStats(): { total: number, filtered: number } {
 		// This could be called before the tree is created when setting this.filterState.filterText value
 		return {
@@ -323,7 +329,7 @@ export class Repl extends ViewPane implements IHistoryNavigationWidget {
 			this.modelChangeListener.dispose();
 			this.modelChangeListener = activeEditorControl.onDidChangeModelLanguage(() => this.setMode());
 			if (this.model && activeEditorControl.hasModel()) {
-				this.model.setMode(activeEditorControl.getModel().getLanguageIdentifier());
+				this.model.setMode(activeEditorControl.getModel().getLanguageId());
 			}
 		}
 	}
@@ -379,7 +385,7 @@ export class Repl extends ViewPane implements IHistoryNavigationWidget {
 	}
 
 	async selectSession(session?: IDebugSession): Promise<void> {
-		const treeInput = this.tree.getInput();
+		const treeInput = this.tree && this.tree.getInput();
 		if (!session) {
 			const focusedSession = this.debugService.getViewModel().focusedSession;
 			// If there is a focusedSession focus on that one, otherwise just show any other not ignored session
@@ -403,7 +409,7 @@ export class Repl extends ViewPane implements IHistoryNavigationWidget {
 			}
 		}
 
-		this.replInput.updateOptions({ readOnly: this.isReadonly });
+		this.replInput?.updateOptions({ readOnly: this.isReadonly });
 		this.updateInputDecoration();
 	}
 
@@ -522,7 +528,7 @@ export class Repl extends ViewPane implements IHistoryNavigationWidget {
 			if (session) {
 				// Automatically expand repl group elements when specified
 				const autoExpandElements = async (elements: IReplElement[]) => {
-					for (let element of elements) {
+					for (const element of elements) {
 						if (element instanceof ReplGroup) {
 							if (element.autoExpand && !autoExpanded.has(element.getId())) {
 								autoExpanded.add(element.getId());
@@ -750,7 +756,7 @@ class AcceptReplInputAction extends EditorAction {
 	}
 
 	run(accessor: ServicesAccessor, editor: ICodeEditor): void | Promise<void> {
-		SuggestController.get(editor).cancelSuggestWidget();
+		SuggestController.get(editor)?.cancelSuggestWidget();
 		const repl = getReplView(accessor.get(IViewsService));
 		repl?.acceptReplInput();
 	}
@@ -766,7 +772,7 @@ class FilterReplAction extends EditorAction {
 			precondition: CONTEXT_IN_DEBUG_REPL,
 			kbOpts: {
 				kbExpr: EditorContextKeys.textInputFocus,
-				primary: KeyMod.CtrlCmd | KeyCode.KEY_F,
+				primary: KeyMod.CtrlCmd | KeyCode.KeyF,
 				weight: KeybindingWeight.EditorContrib
 			}
 		});

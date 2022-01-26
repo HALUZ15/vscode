@@ -19,9 +19,9 @@ import { getOrDefault } from 'vs/base/common/objects';
 import { IRange, Range } from 'vs/base/common/range';
 import { INewScrollDimensions, Scrollable, ScrollbarVisibility, ScrollEvent } from 'vs/base/common/scrollable';
 import { ISpliceable } from 'vs/base/common/sequence';
-import { IListDragAndDrop, IListDragEvent, IListGestureEvent, IListMouseEvent, IListRenderer, IListTouchEvent, IListVirtualDelegate, ListDragOverEffect } from './list';
-import { RangeMap, shift } from './rangeMap';
-import { IRow, RowCache } from './rowCache';
+import { IListDragAndDrop, IListDragEvent, IListGestureEvent, IListMouseEvent, IListRenderer, IListTouchEvent, IListVirtualDelegate, ListDragOverEffect } from 'vs/base/browser/ui/list/list';
+import { RangeMap, shift } from 'vs/base/browser/ui/list/rangeMap';
+import { IRow, RowCache } from 'vs/base/browser/ui/list/rowCache';
 
 interface IItem<T> {
 	readonly id: string;
@@ -203,6 +203,16 @@ class ListViewAccessibilityProvider<T> implements Required<IListViewAccessibilit
 	}
 }
 
+/**
+ * The {@link ListView} is a virtual scrolling engine.
+ *
+ * Given that it only renders elements within its viewport, it can hold large
+ * collections of elements and stay very performant. The performance bottleneck
+ * usually lies within the user's rendering code for each element.
+ *
+ * @remarks It is a low-level widget, not meant to be used directly. Refer to the
+ * List widget instead.
+ */
 export class ListView<T> implements ISpliceable<T>, IDisposable {
 
 	private static InstanceCount = 0;
@@ -462,7 +472,7 @@ export class ListView<T> implements ISpliceable<T>, IDisposable {
 
 		// try to reuse rows, avoid removing them from DOM
 		const rowsToDispose = new Map<string, IRow[]>();
-		for (let i = removeRange.start; i < removeRange.end; i++) {
+		for (let i = removeRange.end - 1; i >= removeRange.start; i--) {
 			const item = this.items[i];
 			item.dragStartDisposable.dispose();
 
@@ -1317,6 +1327,16 @@ export class ListView<T> implements ISpliceable<T>, IDisposable {
 
 	private probeDynamicHeight(index: number): number {
 		const item = this.items[index];
+
+		if (!!this.virtualDelegate.getDynamicHeight) {
+			const newSize = this.virtualDelegate.getDynamicHeight(item.element);
+			if (newSize !== null) {
+				const size = item.size;
+				item.size = newSize;
+				item.lastDynamicHeightWidth = this.renderWidth;
+				return newSize - size;
+			}
+		}
 
 		if (!item.hasDynamicHeight || item.lastDynamicHeightWidth === this.renderWidth) {
 			return 0;

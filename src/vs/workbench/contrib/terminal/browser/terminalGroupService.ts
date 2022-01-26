@@ -8,7 +8,7 @@ import { timeout } from 'vs/base/common/async';
 import { Emitter } from 'vs/base/common/event';
 import { Disposable } from 'vs/base/common/lifecycle';
 import { URI } from 'vs/base/common/uri';
-import { FindReplaceState } from 'vs/editor/contrib/find/findState';
+import { FindReplaceState } from 'vs/editor/contrib/find/browser/findState';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { IContextKey, IContextKeyService } from 'vs/platform/contextkey/common/contextkey';
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
@@ -20,7 +20,6 @@ import { getInstanceFromResource } from 'vs/workbench/contrib/terminal/browser/t
 import { TerminalViewPane } from 'vs/workbench/contrib/terminal/browser/terminalView';
 import { TERMINAL_VIEW_ID } from 'vs/workbench/contrib/terminal/common/terminal';
 import { TerminalContextKeys } from 'vs/workbench/contrib/terminal/common/terminalContextKey';
-import { IWorkbenchLayoutService } from 'vs/workbench/services/layout/browser/layoutService';
 
 export class TerminalGroupService extends Disposable implements ITerminalGroupService, ITerminalFindHost {
 	declare _serviceBrand: undefined;
@@ -32,7 +31,6 @@ export class TerminalGroupService extends Disposable implements ITerminalGroupSe
 	}
 
 	private _terminalGroupCountContextKey: IContextKey<number>;
-	private _terminalCountContextKey: IContextKey<number>;
 
 	private _container: HTMLElement | undefined;
 
@@ -53,6 +51,8 @@ export class TerminalGroupService extends Disposable implements ITerminalGroupSe
 	readonly onDidChangeActiveInstance = this._onDidChangeActiveInstance.event;
 	private readonly _onDidChangeInstances = new Emitter<void>();
 	readonly onDidChangeInstances = this._onDidChangeInstances.event;
+	private readonly _onDidChangeInstanceCapability = new Emitter<ITerminalInstance>();
+	readonly onDidChangeInstanceCapability = this._onDidChangeInstanceCapability.event;
 
 	private readonly _onDidChangePanelOrientation = new Emitter<Orientation>();
 	readonly onDidChangePanelOrientation = this._onDidChangePanelOrientation.event;
@@ -61,7 +61,6 @@ export class TerminalGroupService extends Disposable implements ITerminalGroupSe
 		@IContextKeyService private _contextKeyService: IContextKeyService,
 		@IInstantiationService private readonly _instantiationService: IInstantiationService,
 		@IViewsService private readonly _viewsService: IViewsService,
-		@IWorkbenchLayoutService private _layoutService: IWorkbenchLayoutService,
 		@IViewDescriptorService private readonly _viewDescriptorService: IViewDescriptorService,
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
 	) {
@@ -70,10 +69,8 @@ export class TerminalGroupService extends Disposable implements ITerminalGroupSe
 		this.onDidDisposeGroup(group => this._removeGroup(group));
 
 		this._terminalGroupCountContextKey = TerminalContextKeys.groupCount.bindTo(this._contextKeyService);
-		this._terminalCountContextKey = TerminalContextKeys.count.bindTo(this._contextKeyService);
 
 		this.onDidChangeGroups(() => this._terminalGroupCountContextKey.set(this.groups.length));
-		this.onDidChangeInstances(() => this._terminalCountContextKey.set(this.instances.length));
 
 		this._findState = new FindReplaceState();
 	}
@@ -84,7 +81,7 @@ export class TerminalGroupService extends Disposable implements ITerminalGroupSe
 		if (location === ViewContainerLocation.Panel) {
 			const panel = this._viewDescriptorService.getViewContainerByViewId(TERMINAL_VIEW_ID);
 			if (panel && this._viewDescriptorService.getViewContainerModel(panel).activeViewDescriptors.length === 1) {
-				this._layoutService.setPanelHidden(true);
+				this._viewsService.closeView(TERMINAL_VIEW_ID);
 				TerminalContextKeys.tabsMouse.bindTo(this._contextKeyService).set(false);
 			}
 		}
@@ -151,6 +148,7 @@ export class TerminalGroupService extends Disposable implements ITerminalGroupSe
 				this._onDidChangeActiveInstance.fire(e);
 			}
 		}));
+		group.addDisposable(group.onDidChangeInstanceCapability(this._onDidChangeInstanceCapability.fire, this._onDidChangeInstanceCapability));
 		group.addDisposable(group.onInstancesChanged(this._onDidChangeInstances.fire, this._onDidChangeInstances));
 		group.addDisposable(group.onDisposed(this._onDidDisposeGroup.fire, this._onDidDisposeGroup));
 		if (group.terminalInstances.length > 0) {
@@ -177,6 +175,11 @@ export class TerminalGroupService extends Disposable implements ITerminalGroupSe
 			const instance = this.activeInstance;
 			if (instance) {
 				await instance.focusWhenReady(true);
+				// HACK: as a workaround for https://github.com/microsoft/vscode/issues/134692,
+				// this will trigger a forced refresh of the viewport to sync the viewport and scroll bar.
+				// This can likely be removed after https://github.com/xtermjs/xterm.js/issues/291 is
+				// fixed upstream.
+				instance.setVisible(true);
 			}
 		}
 	}
@@ -399,6 +402,19 @@ export class TerminalGroupService extends Disposable implements ITerminalGroupSe
 	}
 
 	joinInstances(instances: ITerminalInstance[]) {
+		const group = this.getGroupForInstance(instances[0]);
+		if (group) {
+			let differentGroups = true;
+			for (let i = 1; i < group.terminalInstances.length; i++) {
+				if (group.terminalInstances.includes(instances[i])) {
+					differentGroups = false;
+					break;
+				}
+			}
+			if (!differentGroups) {
+				return;
+			}
+		}
 		// Find the group of the first instance that is the only instance in the group, if one exists
 		let candidateInstance: ITerminalInstance | undefined = undefined;
 		let candidateGroup: ITerminalGroup | undefined = undefined;

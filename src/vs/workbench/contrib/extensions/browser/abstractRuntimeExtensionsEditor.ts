@@ -379,7 +379,7 @@ export abstract class AbstractRuntimeExtensionsEditor extends EditorPane {
 						extraLabel = `$(remote) ${element.description.extensionLocation.authority}`;
 					}
 				} else if (element.status.runningLocation === ExtensionRunningLocation.LocalWebWorker) {
-					extraLabel = `$(rocket) web worker`;
+					extraLabel = `$(globe) web worker`;
 				}
 
 				if (extraLabel) {
@@ -487,6 +487,6 @@ export class ShowRuntimeExtensionsAction extends Action2 {
 	}
 
 	async run(accessor: ServicesAccessor): Promise<void> {
-		await accessor.get(IEditorService).openEditor(RuntimeExtensionsInput.instance, { revealIfOpened: true, pinned: true });
+		await accessor.get(IEditorService).openEditor(RuntimeExtensionsInput.instance, { pinned: true });
 	}
 }

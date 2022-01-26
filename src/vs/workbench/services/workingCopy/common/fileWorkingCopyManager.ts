@@ -16,13 +16,12 @@ import { IFileService } from 'vs/platform/files/common/files';
 import { ISaveOptions } from 'vs/workbench/common/editor';
 import { IWorkbenchEnvironmentService } from 'vs/workbench/services/environment/common/environmentService';
 import { IPathService } from 'vs/workbench/services/path/common/pathService';
-import { IUriIdentityService } from 'vs/workbench/services/uriIdentity/common/uriIdentity';
+import { IUriIdentityService } from 'vs/platform/uriIdentity/common/uriIdentity';
 import { IStoredFileWorkingCopy, IStoredFileWorkingCopyModel, IStoredFileWorkingCopyModelFactory, IStoredFileWorkingCopyResolveOptions, StoredFileWorkingCopyState } from 'vs/workbench/services/workingCopy/common/storedFileWorkingCopy';
 import { StoredFileWorkingCopyManager, IStoredFileWorkingCopyManager, IStoredFileWorkingCopyManagerResolveOptions } from 'vs/workbench/services/workingCopy/common/storedFileWorkingCopyManager';
 import { IUntitledFileWorkingCopy, IUntitledFileWorkingCopyModel, IUntitledFileWorkingCopyModelFactory, UntitledFileWorkingCopy } from 'vs/workbench/services/workingCopy/common/untitledFileWorkingCopy';
 import { INewOrExistingUntitledFileWorkingCopyOptions, INewUntitledFileWorkingCopyOptions, INewUntitledFileWorkingCopyWithAssociatedResourceOptions, IUntitledFileWorkingCopyManager, UntitledFileWorkingCopyManager } from 'vs/workbench/services/workingCopy/common/untitledFileWorkingCopyManager';
 import { IWorkingCopyFileService } from 'vs/workbench/services/workingCopy/common/workingCopyFileService';
-import { isValidBasename } from 'vs/base/common/extpath';
 import { IBaseFileWorkingCopyManager } from 'vs/workbench/services/workingCopy/common/abstractFileWorkingCopyManager';
 import { IFileWorkingCopy } from 'vs/workbench/services/workingCopy/common/fileWorkingCopy';
 import { ILabelService } from 'vs/platform/label/common/label';
@@ -219,6 +218,12 @@ export class FileWorkingCopyManager<S extends IStoredFileWorkingCopyModel, U ext
 					}
 				}));
 
+				// Removals: once a stored working copy is no longer
+				// under our control, make sure to signal this as
+				// decoration change because from this point on we
+				// have no way of updating the decoration anymore.
+				this._register(this.stored.onDidRemove(workingCopyUri => this._onDidChange.fire([workingCopyUri])));
+
 				// Changes
 				this._register(this.stored.onDidChangeReadonly(workingCopy => this._onDidChange.fire([workingCopy.resource])));
 				this._register(this.stored.onDidChangeOrphaned(workingCopy => this._onDidChange.fire([workingCopy.resource])));
@@ -226,7 +231,7 @@ export class FileWorkingCopyManager<S extends IStoredFileWorkingCopyModel, U ext
 
 			provideDecorations(uri: URI): IDecorationData | undefined {
 				const workingCopy = this.stored.get(uri);
-				if (!workingCopy) {
+				if (!workingCopy || workingCopy.isDisposed()) {
 					return undefined;
 				}
 
@@ -237,7 +242,7 @@ export class FileWorkingCopyManager<S extends IStoredFileWorkingCopyModel, U ext
 				if (isReadonly && isOrphaned) {
 					return {
 						color: listErrorForeground,
-						letter: Codicon.lock,
+						letter: Codicon.lockSmall,
 						strikethrough: true,
 						tooltip: localize('readonlyAndDeleted', "Deleted, Read Only"),
 					};
@@ -246,7 +251,7 @@ export class FileWorkingCopyManager<S extends IStoredFileWorkingCopyModel, U ext
 				// Readonly
 				else if (isReadonly) {
 					return {
-						letter: Codicon.lock,
+						letter: Codicon.lockSmall,
 						tooltip: localize('readonly', "Read Only"),
 					};
 				}
@@ -324,7 +329,7 @@ export class FileWorkingCopyManager<S extends IStoredFileWorkingCopyModel, U ext
 
 		// Just save if target is same as working copies own resource
 		// and we are not saving an untitled file working copy
-		if (this.fileService.canHandleResource(source) && isEqual(source, target)) {
+		if (this.fileService.hasProvider(source) && isEqual(source, target)) {
 			return this.doSave(source, { ...options, force: true  /* force to save, even if not dirty (https://github.com/microsoft/vscode/issues/99619) */ });
 		}
 
@@ -333,7 +338,7 @@ export class FileWorkingCopyManager<S extends IStoredFileWorkingCopyModel, U ext
 		// underlying file system cannot have both and then save.
 		// However, this will only work if the source exists
 		// and is not orphaned, so we need to check that too.
-		if (this.fileService.canHandleResource(source) && this.uriIdentityService.extUri.isEqual(source, target) && (await this.fileService.exists(source))) {
+		if (this.fileService.hasProvider(source) && this.uriIdentityService.extUri.isEqual(source, target) && (await this.fileService.exists(source))) {
 
 			// Move via working copy file service to enable participants
 			await this.workingCopyFileService.move([{ file: { source, target } }], CancellationToken.None);
@@ -401,7 +406,10 @@ export class FileWorkingCopyManager<S extends IStoredFileWorkingCopyModel, U ext
 		await targetStoredFileWorkingCopy.model?.update(sourceContents, CancellationToken.None);
 
 		// Save target
-		await targetStoredFileWorkingCopy.save({ ...options, force: true  /* force to save, even if not dirty (https://github.com/microsoft/vscode/issues/99619) */ });
+		const success = await targetStoredFileWorkingCopy.save({ ...options, force: true  /* force to save, even if not dirty (https://github.com/microsoft/vscode/issues/99619) */ });
+		if (!success) {
+			return undefined;
+		}
 
 		// Revert the source
 		await sourceWorkingCopy?.revert();
@@ -460,7 +468,7 @@ export class FileWorkingCopyManager<S extends IStoredFileWorkingCopyModel, U ext
 	private async suggestSavePath(resource: URI): Promise<URI> {
 
 		// 1.) Just take the resource as is if the file service can handle it
-		if (this.fileService.canHandleResource(resource)) {
+		if (this.fileService.hasProvider(resource)) {
 			return resource;
 		}
 
@@ -470,13 +478,18 @@ export class FileWorkingCopyManager<S extends IStoredFileWorkingCopyModel, U ext
 			return toLocalResource(resource, this.environmentService.remoteAuthority, this.pathService.defaultUriScheme);
 		}
 
+		const defaultFilePath = await this.fileDialogService.defaultFilePath();
+
 		// 3.) Pick the working copy name if valid joined with default path
-		if (workingCopy && isValidBasename(workingCopy.name)) {
-			return joinPath(await this.fileDialogService.defaultFilePath(), workingCopy.name);
+		if (workingCopy) {
+			const candidatePath = joinPath(defaultFilePath, workingCopy.name);
+			if (await this.pathService.hasValidBasename(candidatePath)) {
+				return candidatePath;
+			}
 		}
 
 		// 4.) Finally fallback to the name of the resource joined with default path
-		return joinPath(await this.fileDialogService.defaultFilePath(), basename(resource));
+		return joinPath(defaultFilePath, basename(resource));
 	}
 
 	//#endregion

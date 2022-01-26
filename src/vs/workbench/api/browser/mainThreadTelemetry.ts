@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { ITelemetryService, TelemetryConfiguration, TelemetryLevel, TELEMETRY_SETTING_ID } from 'vs/platform/telemetry/common/telemetry';
+import { ITelemetryService, TelemetryLevel, TELEMETRY_OLD_SETTING_ID, TELEMETRY_SETTING_ID } from 'vs/platform/telemetry/common/telemetry';
 import { MainThreadTelemetryShape, MainContext, IExtHostContext, ExtHostTelemetryShape, ExtHostContext } from '../common/extHost.protocol';
 import { extHostNamedCustomer } from 'vs/workbench/api/common/extHostCustomers';
 import { ClassifiedEvent, StrictPropertyCheck, GDPRClassification } from 'vs/platform/telemetry/common/gdprTypings';
@@ -11,7 +11,7 @@ import { Disposable } from 'vs/base/common/lifecycle';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { IEnvironmentService } from 'vs/platform/environment/common/environment';
 import { IProductService } from 'vs/platform/product/common/productService';
-import { getTelemetryConfiguration, getTelemetryLevel } from 'vs/platform/telemetry/common/telemetryUtils';
+import { getTelemetryLevel, supportsTelemetry } from 'vs/platform/telemetry/common/telemetryUtils';
 
 @extHostNamedCustomer(MainContext.MainThreadTelemetry)
 export class MainThreadTelemetry extends Disposable implements MainThreadTelemetryShape {
@@ -23,30 +23,30 @@ export class MainThreadTelemetry extends Disposable implements MainThreadTelemet
 		extHostContext: IExtHostContext,
 		@ITelemetryService private readonly _telemetryService: ITelemetryService,
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
-		@IEnvironmentService private readonly _environmenService: IEnvironmentService,
+		@IEnvironmentService private readonly _environmentService: IEnvironmentService,
 		@IProductService private readonly _productService: IProductService
 	) {
 		super();
 
 		this._proxy = extHostContext.getProxy(ExtHostContext.ExtHostTelemetry);
 
-		if (getTelemetryLevel(this._productService, this._environmenService) >= TelemetryLevel.LOG) {
+		if (supportsTelemetry(this._productService, this._environmentService)) {
 			this._register(this._configurationService.onDidChangeConfiguration(e => {
-				if (e.affectedKeys.includes(TELEMETRY_SETTING_ID)) {
-					this._proxy.$onDidChangeTelemetryEnabled(this.telemetryEnabled);
+				if (e.affectsConfiguration(TELEMETRY_SETTING_ID) || e.affectsConfiguration(TELEMETRY_OLD_SETTING_ID)) {
+					this._proxy.$onDidChangeTelemetryLevel(this.telemetryLevel);
 				}
 			}));
 		}
 
-		this._proxy.$initializeTelemetryEnabled(this.telemetryEnabled);
+		this._proxy.$initializeTelemetryLevel(this.telemetryLevel);
 	}
 
-	private get telemetryEnabled(): boolean {
-		if (getTelemetryLevel(this._productService, this._environmenService) < TelemetryLevel.USER) {
-			return false;
+	private get telemetryLevel(): TelemetryLevel {
+		if (!supportsTelemetry(this._productService, this._environmentService)) {
+			return TelemetryLevel.NONE;
 		}
 
-		return getTelemetryConfiguration(this._configurationService) === TelemetryConfiguration.ON;
+		return getTelemetryLevel(this._configurationService);
 	}
 
 	$publicLog(eventName: string, data: any = Object.create(null)): void {

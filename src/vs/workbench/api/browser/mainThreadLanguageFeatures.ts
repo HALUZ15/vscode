@@ -5,16 +5,17 @@
 
 import { IDisposable } from 'vs/base/common/lifecycle';
 import { Emitter, Event } from 'vs/base/common/event';
-import { ITextModel, ISingleEditOperation } from 'vs/editor/common/model';
-import * as modes from 'vs/editor/common/modes';
+import { ITextModel } from 'vs/editor/common/model';
+import { ISingleEditOperation } from 'vs/editor/common/core/editOperation';
+import * as modes from 'vs/editor/common/languages';
 import * as search from 'vs/workbench/contrib/search/common/search';
 import { CancellationToken } from 'vs/base/common/cancellation';
 import { Position as EditorPosition } from 'vs/editor/common/core/position';
 import { Range as EditorRange, IRange } from 'vs/editor/common/core/range';
-import { ExtHostContext, MainThreadLanguageFeaturesShape, ExtHostLanguageFeaturesShape, MainContext, IExtHostContext, ILanguageConfigurationDto, IRegExpDto, IIndentationRuleDto, IOnEnterRuleDto, ILocationDto, IWorkspaceSymbolDto, reviveWorkspaceEditDto, IDocumentFilterDto, IDefinitionLinkDto, ISignatureHelpProviderMetadataDto, ILinkDto, ICallHierarchyItemDto, ISuggestDataDto, ICodeActionDto, ISuggestDataDtoField, ISuggestResultDtoField, ICodeActionProviderMetadataDto, ILanguageWordDefinitionDto, IdentifiableInlineCompletions, IdentifiableInlineCompletion, ITypeHierarchyItemDto } from '../common/extHost.protocol';
-import { LanguageConfigurationRegistry } from 'vs/editor/common/modes/languageConfigurationRegistry';
-import { LanguageConfiguration, IndentationRule, OnEnterRule } from 'vs/editor/common/modes/languageConfiguration';
-import { IModeService } from 'vs/editor/common/services/modeService';
+import { ExtHostContext, MainThreadLanguageFeaturesShape, ExtHostLanguageFeaturesShape, MainContext, IExtHostContext, ILanguageConfigurationDto, IRegExpDto, IIndentationRuleDto, IOnEnterRuleDto, ILocationDto, IWorkspaceSymbolDto, reviveWorkspaceEditDto, IDocumentFilterDto, ILocationLinkDto, ISignatureHelpProviderMetadataDto, ILinkDto, ICallHierarchyItemDto, ISuggestDataDto, ICodeActionDto, ISuggestDataDtoField, ISuggestResultDtoField, ICodeActionProviderMetadataDto, ILanguageWordDefinitionDto, IdentifiableInlineCompletions, IdentifiableInlineCompletion, ITypeHierarchyItemDto, IInlayHintDto } from '../common/extHost.protocol';
+import { ILanguageConfigurationService, LanguageConfigurationRegistry } from 'vs/editor/common/languages/languageConfigurationRegistry';
+import { LanguageConfiguration, IndentationRule, OnEnterRule } from 'vs/editor/common/languages/languageConfiguration';
+import { ILanguageService } from 'vs/editor/common/services/language';
 import { extHostNamedCustomer } from 'vs/workbench/api/common/extHostCustomers';
 import { URI } from 'vs/base/common/uri';
 import { Selection } from 'vs/editor/common/core/selection';
@@ -23,45 +24,48 @@ import * as callh from 'vs/workbench/contrib/callHierarchy/common/callHierarchy'
 import * as typeh from 'vs/workbench/contrib/typeHierarchy/common/typeHierarchy';
 import { mixin } from 'vs/base/common/objects';
 import { decodeSemanticTokensDto } from 'vs/editor/common/services/semanticTokensDto';
+import { revive } from 'vs/base/common/marshalling';
+import { CancellationError } from 'vs/base/common/errors';
 
 @extHostNamedCustomer(MainContext.MainThreadLanguageFeatures)
 export class MainThreadLanguageFeatures implements MainThreadLanguageFeaturesShape {
 
 	private readonly _proxy: ExtHostLanguageFeaturesShape;
-	private readonly _modeService: IModeService;
+	private readonly _languageService: ILanguageService;
 	private readonly _registrations = new Map<number, IDisposable>();
 
 	constructor(
 		extHostContext: IExtHostContext,
-		@IModeService modeService: IModeService,
+		@ILanguageService languageService: ILanguageService,
+		@ILanguageConfigurationService languageConfigurationService: ILanguageConfigurationService
 	) {
 		this._proxy = extHostContext.getProxy(ExtHostContext.ExtHostLanguageFeatures);
-		this._modeService = modeService;
+		this._languageService = languageService;
 
-		if (this._modeService) {
+		if (this._languageService) {
 			const updateAllWordDefinitions = () => {
-				const langWordPairs = LanguageConfigurationRegistry.getWordDefinitions();
 				let wordDefinitionDtos: ILanguageWordDefinitionDto[] = [];
-				for (const [languageId, wordDefinition] of langWordPairs) {
-					const language = this._modeService.getLanguageIdentifier(languageId);
-					if (!language) {
-						continue;
-					}
+				for (const languageId of languageService.getRegisteredLanguageIds()) {
+					const wordDefinition = languageConfigurationService.getLanguageConfiguration(languageId).getWordDefinition();
 					wordDefinitionDtos.push({
-						languageId: language.language,
+						languageId: languageId,
 						regexSource: wordDefinition.source,
 						regexFlags: wordDefinition.flags
 					});
 				}
 				this._proxy.$setWordDefinitions(wordDefinitionDtos);
 			};
-			LanguageConfigurationRegistry.onDidChange((e) => {
-				const wordDefinition = LanguageConfigurationRegistry.getWordDefinition(e.languageIdentifier.id);
-				this._proxy.$setWordDefinitions([{
-					languageId: e.languageIdentifier.language,
-					regexSource: wordDefinition.source,
-					regexFlags: wordDefinition.flags
-				}]);
+			languageConfigurationService.onDidChange((e) => {
+				if (!e.languageId) {
+					updateAllWordDefinitions();
+				} else {
+					const wordDefinition = languageConfigurationService.getLanguageConfiguration(e.languageId).getWordDefinition();
+					this._proxy.$setWordDefinitions([{
+						languageId: e.languageId,
+						regexSource: wordDefinition.source,
+						regexFlags: wordDefinition.flags
+					}]);
+				}
 			});
 			updateAllWordDefinitions();
 		}
@@ -98,9 +102,9 @@ export class MainThreadLanguageFeatures implements MainThreadLanguageFeaturesSha
 		}
 	}
 
-	private static _reviveLocationLinkDto(data: IDefinitionLinkDto): modes.LocationLink;
-	private static _reviveLocationLinkDto(data: IDefinitionLinkDto[]): modes.LocationLink[];
-	private static _reviveLocationLinkDto(data: IDefinitionLinkDto | IDefinitionLinkDto[]): modes.LocationLink | modes.LocationLink[] {
+	private static _reviveLocationLinkDto(data: ILocationLinkDto): modes.LocationLink;
+	private static _reviveLocationLinkDto(data: ILocationLinkDto[]): modes.LocationLink[];
+	private static _reviveLocationLinkDto(data: ILocationLinkDto | ILocationLinkDto[]): modes.LocationLink | modes.LocationLink[] {
 		if (!data) {
 			return <modes.LocationLink>data;
 		} else if (Array.isArray(data)) {
@@ -388,27 +392,26 @@ export class MainThreadLanguageFeatures implements MainThreadLanguageFeaturesSha
 
 	// --- navigate type
 
-	$registerNavigateTypeSupport(handle: number): void {
+	$registerNavigateTypeSupport(handle: number, supportsResolve: boolean): void {
 		let lastResultId: number | undefined;
-		this._registrations.set(handle, search.WorkspaceSymbolProviderRegistry.register(<search.IWorkspaceSymbolProvider>{
-			provideWorkspaceSymbols: (search: string, token: CancellationToken): Promise<search.IWorkspaceSymbol[]> => {
-				return this._proxy.$provideWorkspaceSymbols(handle, search, token).then(result => {
-					if (lastResultId !== undefined) {
-						this._proxy.$releaseWorkspaceSymbols(handle, lastResultId);
-					}
-					lastResultId = result._id;
-					return MainThreadLanguageFeatures._reviveWorkspaceSymbolDto(result.symbols);
-				});
-			},
-			resolveWorkspaceSymbol: (item: search.IWorkspaceSymbol, token: CancellationToken): Promise<search.IWorkspaceSymbol | undefined> => {
-				return this._proxy.$resolveWorkspaceSymbol(handle, item, token).then(i => {
-					if (i) {
-						return MainThreadLanguageFeatures._reviveWorkspaceSymbolDto(i);
-					}
-					return undefined;
-				});
+
+		const provider: search.IWorkspaceSymbolProvider = {
+			provideWorkspaceSymbols: async (search: string, token: CancellationToken): Promise<search.IWorkspaceSymbol[]> => {
+				const result = await this._proxy.$provideWorkspaceSymbols(handle, search, token);
+				if (lastResultId !== undefined) {
+					this._proxy.$releaseWorkspaceSymbols(handle, lastResultId);
+				}
+				lastResultId = result.cacheId;
+				return MainThreadLanguageFeatures._reviveWorkspaceSymbolDto(result.symbols);
 			}
-		}));
+		};
+		if (supportsResolve) {
+			provider.resolveWorkspaceSymbol = async (item: search.IWorkspaceSymbol, token: CancellationToken): Promise<search.IWorkspaceSymbol | undefined> => {
+				const resolvedItem = await this._proxy.$resolveWorkspaceSymbol(handle, item, token);
+				return resolvedItem && MainThreadLanguageFeatures._reviveWorkspaceSymbolDto(resolvedItem);
+			};
+		}
+		this._registrations.set(handle, search.WorkspaceSymbolProviderRegistry.register(provider));
 	}
 
 	// --- rename
@@ -449,7 +452,7 @@ export class MainThreadLanguageFeatures implements MainThreadLanguageFeaturesSha
 
 	// --- suggest
 
-	private static _inflateSuggestDto(defaultRange: IRange | { insert: IRange, replace: IRange }, data: ISuggestDataDto): modes.CompletionItem {
+	private static _inflateSuggestDto(defaultRange: IRange | { insert: IRange, replace: IRange; }, data: ISuggestDataDto): modes.CompletionItem {
 
 		const label = data[ISuggestDataDtoField.label];
 
@@ -549,14 +552,43 @@ export class MainThreadLanguageFeatures implements MainThreadLanguageFeaturesSha
 
 	// --- inline hints
 
-	$registerInlayHintsProvider(handle: number, selector: IDocumentFilterDto[], eventHandle: number | undefined): void {
+	$registerInlayHintsProvider(handle: number, selector: IDocumentFilterDto[], supportsResolve: boolean, eventHandle: number | undefined): void {
 		const provider = <modes.InlayHintsProvider>{
-			provideInlayHints: async (model: ITextModel, range: EditorRange, token: CancellationToken): Promise<modes.InlayHint[] | undefined> => {
+			provideInlayHints: async (model: ITextModel, range: EditorRange, token: CancellationToken): Promise<modes.InlayHintList | undefined> => {
 				const result = await this._proxy.$provideInlayHints(handle, model.uri, range, token);
-				return result?.hints;
+				if (!result) {
+					return;
+				}
+				return {
+					hints: revive(result.hints),
+					dispose: () => {
+						if (result.cacheId) {
+							this._proxy.$releaseInlayHints(handle, result.cacheId);
+						}
+					}
+				};
 			}
 		};
-
+		if (supportsResolve) {
+			provider.resolveInlayHint = async (hint, token) => {
+				const dto: IInlayHintDto = hint;
+				if (!dto.cacheId) {
+					return hint;
+				}
+				const result = await this._proxy.$resolveInlayHint(handle, dto.cacheId, token);
+				if (token.isCancellationRequested) {
+					throw new CancellationError();
+				}
+				if (!result) {
+					return hint;
+				}
+				return {
+					...hint,
+					tooltip: result.tooltip,
+					label: revive<string | modes.InlayHintLabelPart[]>(result.label)
+				};
+			};
+		}
 		if (typeof eventHandle === 'number') {
 			const emitter = new Emitter<void>();
 			this._registrations.set(eventHandle, emitter);
@@ -566,10 +598,10 @@ export class MainThreadLanguageFeatures implements MainThreadLanguageFeaturesSha
 		this._registrations.set(handle, modes.InlayHintsProviderRegistry.register(selector, provider));
 	}
 
-	$emitInlayHintsEvent(eventHandle: number, event?: any): void {
+	$emitInlayHintsEvent(eventHandle: number): void {
 		const obj = this._registrations.get(eventHandle);
 		if (obj instanceof Emitter) {
-			obj.fire(event);
+			obj.fire(undefined);
 		}
 	}
 
@@ -585,8 +617,8 @@ export class MainThreadLanguageFeatures implements MainThreadLanguageFeaturesSha
 					return {
 						links: dto.links.map(MainThreadLanguageFeatures._reviveLinkDTO),
 						dispose: () => {
-							if (typeof dto.id === 'number') {
-								this._proxy.$releaseDocumentLinks(handle, dto.id);
+							if (typeof dto.cacheId === 'number') {
+								this._proxy.$releaseDocumentLinks(handle, dto.cacheId);
 							}
 						}
 					};
@@ -683,7 +715,7 @@ export class MainThreadLanguageFeatures implements MainThreadLanguageFeaturesSha
 
 			prepareCallHierarchy: async (document, position, token) => {
 				const items = await this._proxy.$prepareCallHierarchy(handle, document.uri, position, token);
-				if (!items) {
+				if (!items || items.length === 0) {
 					return undefined;
 				}
 				return {
@@ -775,9 +807,8 @@ export class MainThreadLanguageFeatures implements MainThreadLanguageFeaturesSha
 			};
 		}
 
-		const languageIdentifier = this._modeService.getLanguageIdentifier(languageId);
-		if (languageIdentifier) {
-			this._registrations.set(handle, LanguageConfigurationRegistry.register(languageIdentifier, configuration, 100));
+		if (this._languageService.isRegisteredLanguageId(languageId)) {
+			this._registrations.set(handle, LanguageConfigurationRegistry.register(languageId, configuration, 100));
 		}
 	}
 

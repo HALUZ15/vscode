@@ -16,16 +16,17 @@ import { PartFingerprint, PartFingerprints, ViewPart } from 'vs/editor/browser/v
 import { RenderMinimap, EditorOption, MINIMAP_GUTTER_WIDTH, EditorLayoutInfoComputer } from 'vs/editor/common/config/editorOptions';
 import { Range } from 'vs/editor/common/core/range';
 import { RGBA8 } from 'vs/editor/common/core/rgba';
-import { IConfiguration, ScrollType } from 'vs/editor/common/editorCommon';
-import { ColorId } from 'vs/editor/common/modes';
+import { ScrollType } from 'vs/editor/common/editorCommon';
+import { IEditorConfiguration } from 'vs/editor/common/config/editorConfiguration';
+import { ColorId } from 'vs/editor/common/languages';
 import { MinimapCharRenderer } from 'vs/editor/browser/viewParts/minimap/minimapCharRenderer';
 import { Constants } from 'vs/editor/browser/viewParts/minimap/minimapCharSheet';
 import { MinimapTokensColorTracker } from 'vs/editor/common/viewModel/minimapTokensColorTracker';
-import { RenderingContext, RestrictedRenderingContext } from 'vs/editor/common/view/renderingContext';
-import { ViewContext, EditorTheme } from 'vs/editor/common/view/viewContext';
-import * as viewEvents from 'vs/editor/common/view/viewEvents';
+import { RenderingContext, RestrictedRenderingContext } from 'vs/editor/browser/view/renderingContext';
+import { ViewContext, EditorTheme } from 'vs/editor/common/viewModel/viewContext';
+import * as viewEvents from 'vs/editor/common/viewModel/viewEvents';
 import { ViewLineData, ViewModelDecoration } from 'vs/editor/common/viewModel/viewModel';
-import { minimapSelection, scrollbarShadow, minimapBackground, minimapSliderBackground, minimapSliderHoverBackground, minimapSliderActiveBackground } from 'vs/platform/theme/common/colorRegistry';
+import { minimapSelection, scrollbarShadow, minimapBackground, minimapSliderBackground, minimapSliderHoverBackground, minimapSliderActiveBackground, minimapForegroundOpacity } from 'vs/platform/theme/common/colorRegistry';
 import { registerThemingParticipant } from 'vs/platform/theme/common/themeService';
 import { ModelDecorationMinimapOptions } from 'vs/editor/common/model/textModel';
 import { Selection } from 'vs/editor/common/core/selection';
@@ -98,9 +99,14 @@ class MinimapOptions {
 	public readonly minimapCharWidth: number;
 
 	public readonly charRenderer: () => MinimapCharRenderer;
+	public readonly defaultBackgroundColor: RGBA8;
 	public readonly backgroundColor: RGBA8;
+	/**
+	 * foreground alpha: integer in [0-255]
+	 */
+	public readonly foregroundAlpha: number;
 
-	constructor(configuration: IConfiguration, theme: EditorTheme, tokensColorTracker: MinimapTokensColorTracker) {
+	constructor(configuration: IEditorConfiguration, theme: EditorTheme, tokensColorTracker: MinimapTokensColorTracker) {
 		const options = configuration.options;
 		const pixelRatio = options.get(EditorOption.pixelRatio);
 		const layoutInfo = options.get(EditorOption.layoutInfo);
@@ -132,15 +138,25 @@ class MinimapOptions {
 		this.minimapCharWidth = Constants.BASE_CHAR_WIDTH * this.fontScale;
 
 		this.charRenderer = once(() => MinimapCharRendererFactory.create(this.fontScale, fontInfo.fontFamily));
-		this.backgroundColor = MinimapOptions._getMinimapBackground(theme, tokensColorTracker);
+		this.defaultBackgroundColor = tokensColorTracker.getColor(ColorId.DefaultBackground);
+		this.backgroundColor = MinimapOptions._getMinimapBackground(theme, this.defaultBackgroundColor);
+		this.foregroundAlpha = MinimapOptions._getMinimapForegroundOpacity(theme);
 	}
 
-	private static _getMinimapBackground(theme: EditorTheme, tokensColorTracker: MinimapTokensColorTracker): RGBA8 {
+	private static _getMinimapBackground(theme: EditorTheme, defaultBackgroundColor: RGBA8): RGBA8 {
 		const themeColor = theme.getColor(minimapBackground);
 		if (themeColor) {
-			return new RGBA8(themeColor.rgba.r, themeColor.rgba.g, themeColor.rgba.b, themeColor.rgba.a);
+			return new RGBA8(themeColor.rgba.r, themeColor.rgba.g, themeColor.rgba.b, Math.round(255 * themeColor.rgba.a));
 		}
-		return tokensColorTracker.getColor(ColorId.DefaultBackground);
+		return defaultBackgroundColor;
+	}
+
+	private static _getMinimapForegroundOpacity(theme: EditorTheme): number {
+		const themeColor = theme.getColor(minimapForegroundOpacity);
+		if (themeColor) {
+			return RGBA8._clamp(Math.round(255 * themeColor.rgba.a));
+		}
+		return 255;
 	}
 
 	public equals(other: MinimapOptions): boolean {
@@ -164,7 +180,9 @@ class MinimapOptions {
 			&& this.fontScale === other.fontScale
 			&& this.minimapLineHeight === other.minimapLineHeight
 			&& this.minimapCharWidth === other.minimapCharWidth
+			&& this.defaultBackgroundColor && this.defaultBackgroundColor.equals(other.defaultBackgroundColor)
 			&& this.backgroundColor && this.backgroundColor.equals(other.backgroundColor)
+			&& this.foregroundAlpha === other.foregroundAlpha
 		);
 	}
 }
@@ -467,6 +485,7 @@ class MinimapBuffers {
 		const backgroundR = background.r;
 		const backgroundG = background.g;
 		const backgroundB = background.b;
+		const backgroundA = background.a;
 
 		const result = new Uint8ClampedArray(WIDTH * HEIGHT * 4);
 		let offset = 0;
@@ -475,7 +494,7 @@ class MinimapBuffers {
 				result[offset] = backgroundR;
 				result[offset + 1] = backgroundG;
 				result[offset + 2] = backgroundB;
-				result[offset + 3] = 255;
+				result[offset + 3] = backgroundA;
 				offset += 4;
 			}
 		}
@@ -560,7 +579,7 @@ class MinimapSamplingState {
 		const halfRatio = ratio / 2;
 
 		if (!oldSamplingState || oldSamplingState.minimapLines.length === 0) {
-			let result: number[] = [];
+			const result: number[] = [];
 			result[0] = 1;
 			if (minimapLineCount > 1) {
 				for (let i = 0, lastIndex = minimapLineCount - 1; i < lastIndex; i++) {
@@ -573,7 +592,7 @@ class MinimapSamplingState {
 
 		const oldMinimapLines = oldSamplingState.minimapLines;
 		const oldLength = oldMinimapLines.length;
-		let result: number[] = [];
+		const result: number[] = [];
 		let oldIndex = 0;
 		let oldDeltaLineCount = 0;
 		let minViewLineNumber = 1;
@@ -846,7 +865,7 @@ export class Minimap extends ViewPart implements IMinimapModel {
 	}
 	public override onTokensChanged(e: viewEvents.ViewTokensChangedEvent): boolean {
 		if (this._samplingState) {
-			let ranges: { fromLineNumber: number; toLineNumber: number; }[] = [];
+			const ranges: { fromLineNumber: number; toLineNumber: number; }[] = [];
 			for (const range of e.ranges) {
 				const minimapLineRange = this._samplingState.modelLineRangeToMinimapLineRange(range.fromLineNumber, range.toLineNumber);
 				if (minimapLineRange) {
@@ -961,7 +980,7 @@ export class Minimap extends ViewPart implements IMinimapModel {
 
 	public getMinimapLinesRenderingData(startLineNumber: number, endLineNumber: number, needed: boolean[]): (ViewLineData | null)[] {
 		if (this._samplingState) {
-			let result: (ViewLineData | null)[] = [];
+			const result: (ViewLineData | null)[] = [];
 			for (let lineIndex = 0, lineCount = endLineNumber - startLineNumber + 1; lineIndex < lineCount; lineIndex++) {
 				if (needed[lineIndex]) {
 					result[lineIndex] = this._context.model.getViewLineData(this._samplingState.minimapLines[startLineNumber + lineIndex - 1]);
@@ -1001,7 +1020,7 @@ export class Minimap extends ViewPart implements IMinimapModel {
 		const decorations = this._context.model.getDecorationsInViewport(visibleRange);
 
 		if (this._samplingState) {
-			let result: ViewModelDecoration[] = [];
+			const result: ViewModelDecoration[] = [];
 			for (const decoration of decorations) {
 				if (!decoration.options.minimap) {
 					continue;
@@ -1371,10 +1390,8 @@ class InnerMinimap extends Disposable {
 		this._slider.setHeight(layout.sliderHeight);
 
 		// Compute horizontal slider coordinates
-		const scrollLeftChars = renderingCtx.scrollLeft / this._model.options.typicalHalfwidthCharacterWidth;
-		const horizontalSliderLeft = Math.min(this._model.options.minimapWidth, Math.round(scrollLeftChars * this._model.options.minimapCharWidth / this._model.options.pixelRatio));
-		this._sliderHorizontal.setLeft(horizontalSliderLeft);
-		this._sliderHorizontal.setWidth(this._model.options.minimapWidth - horizontalSliderLeft);
+		this._sliderHorizontal.setLeft(0);
+		this._sliderHorizontal.setWidth(this._model.options.minimapWidth);
 		this._sliderHorizontal.setTop(0);
 		this._sliderHorizontal.setHeight(layout.sliderHeight);
 
@@ -1490,7 +1507,7 @@ class InnerMinimap extends Disposable {
 				continue;
 			}
 
-			const decorationColor = minimapOptions.getColor(this._theme);
+			const decorationColor = minimapOptions.getColor(this._theme.value);
 			if (!decorationColor || decorationColor.isTransparent()) {
 				continue;
 			}
@@ -1565,7 +1582,7 @@ class InnerMinimap extends Disposable {
 				continue;
 			}
 
-			const decorationColor = minimapOptions.getColor(this._theme);
+			const decorationColor = minimapOptions.getColor(this._theme.value);
 			if (!decorationColor || decorationColor.isTransparent()) {
 				continue;
 			}
@@ -1577,11 +1594,12 @@ class InnerMinimap extends Disposable {
 						this.renderDecorationOnLine(canvasContext, lineOffsetMap, decoration.range, decorationColor, layout, line, lineHeight, lineHeight, tabSize, characterWidth, canvasInnerWidth);
 						continue;
 
-					case MinimapPosition.Gutter:
+					case MinimapPosition.Gutter: {
 						const y = (line - layout.startLineNumber) * lineHeight;
 						const x = 2;
 						this.renderDecoration(canvasContext, decorationColor, x, y, GUTTER_DECORATION_WIDTH, lineHeight);
 						continue;
+					}
 				}
 			}
 		}
@@ -1697,7 +1715,7 @@ class InnerMinimap extends Disposable {
 		}
 
 		// Render untouched lines by using last rendered data.
-		let [_dirtyY1, _dirtyY2, needed] = InnerMinimap._renderUntouchedLines(
+		const [_dirtyY1, _dirtyY2, needed] = InnerMinimap._renderUntouchedLines(
 			imageData,
 			startLineNumber,
 			endLineNumber,
@@ -1708,7 +1726,9 @@ class InnerMinimap extends Disposable {
 		// Fetch rendering info from view model for rest of lines that need rendering.
 		const lineInfo = this._model.getMinimapLinesRenderingData(startLineNumber, endLineNumber, needed);
 		const tabSize = this._model.getOptions().tabSize;
+		const defaultBackground = this._model.options.defaultBackgroundColor;
 		const background = this._model.options.backgroundColor;
+		const foregroundAlpha = this._model.options.foregroundAlpha;
 		const tokensColorTracker = this._model.tokensColorTracker;
 		const useLighterFont = tokensColorTracker.backgroundIsLight();
 		const renderMinimap = this._model.options.renderMinimap;
@@ -1721,17 +1741,26 @@ class InnerMinimap extends Disposable {
 		const innerLinePadding = (minimapLineHeight > renderMinimapLineHeight ? Math.floor((minimapLineHeight - renderMinimapLineHeight) / 2) : 0);
 
 		// Render the rest of lines
+		const backgroundA = background.a / 255;
+		const renderBackground = new RGBA8(
+			Math.round((background.r - defaultBackground.r) * backgroundA + defaultBackground.r),
+			Math.round((background.g - defaultBackground.g) * backgroundA + defaultBackground.g),
+			Math.round((background.b - defaultBackground.b) * backgroundA + defaultBackground.b),
+			255
+		);
 		let dy = 0;
 		const renderedLines: MinimapLine[] = [];
 		for (let lineIndex = 0, lineCount = endLineNumber - startLineNumber + 1; lineIndex < lineCount; lineIndex++) {
 			if (needed[lineIndex]) {
 				InnerMinimap._renderLine(
 					imageData,
-					background,
+					renderBackground,
+					background.a,
 					useLighterFont,
 					renderMinimap,
 					minimapCharWidth,
 					tokensColorTracker,
+					foregroundAlpha,
 					charRenderer,
 					dy,
 					innerLinePadding,
@@ -1856,10 +1885,12 @@ class InnerMinimap extends Disposable {
 	private static _renderLine(
 		target: ImageData,
 		backgroundColor: RGBA8,
+		backgroundAlpha: number,
 		useLighterFont: boolean,
 		renderMinimap: RenderMinimap,
 		charWidth: number,
 		colorTracker: MinimapTokensColorTracker,
+		foregroundAlpha: number,
 		minimapCharRenderer: MinimapCharRenderer,
 		dy: number,
 		innerLinePadding: number,
@@ -1903,9 +1934,9 @@ class InnerMinimap extends Disposable {
 
 					for (let i = 0; i < count; i++) {
 						if (renderMinimap === RenderMinimap.Blocks) {
-							minimapCharRenderer.blockRenderChar(target, dx, dy + innerLinePadding, tokenColor, backgroundColor, useLighterFont, force1pxHeight);
+							minimapCharRenderer.blockRenderChar(target, dx, dy + innerLinePadding, tokenColor, foregroundAlpha, backgroundColor, backgroundAlpha, force1pxHeight);
 						} else { // RenderMinimap.Text
-							minimapCharRenderer.renderChar(target, dx, dy + innerLinePadding, charCode, tokenColor, backgroundColor, fontScale, useLighterFont, force1pxHeight);
+							minimapCharRenderer.renderChar(target, dx, dy + innerLinePadding, charCode, tokenColor, foregroundAlpha, backgroundColor, backgroundAlpha, fontScale, useLighterFont, force1pxHeight);
 						}
 
 						dx += charWidth;
@@ -1958,10 +1989,6 @@ class ContiguousLineMap<T> {
 }
 
 registerThemingParticipant((theme, collector) => {
-	const minimapBackgroundValue = theme.getColor(minimapBackground);
-	if (minimapBackgroundValue) {
-		collector.addRule(`.monaco-editor .minimap > canvas { opacity: ${minimapBackgroundValue.rgba.a}; will-change: opacity; }`);
-	}
 	const sliderBackground = theme.getColor(minimapSliderBackground);
 	if (sliderBackground) {
 		collector.addRule(`.monaco-editor .minimap-slider .minimap-slider-horizontal { background: ${sliderBackground}; }`);

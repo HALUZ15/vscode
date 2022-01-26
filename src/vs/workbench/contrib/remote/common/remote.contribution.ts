@@ -16,10 +16,17 @@ import { IOutputChannelRegistry, Extensions as OutputExt, } from 'vs/workbench/s
 import { localize } from 'vs/nls';
 import { joinPath } from 'vs/base/common/resources';
 import { Disposable } from 'vs/base/common/lifecycle';
-import { TunnelFactoryContribution } from 'vs/workbench/contrib/remote/common/tunnelFactory';
-import { ShowCandidateContribution } from 'vs/workbench/contrib/remote/common/showCandidate';
 import { IConfigurationRegistry, Extensions as ConfigurationExtensions } from 'vs/platform/configuration/common/configurationRegistry';
 import { IJSONSchema } from 'vs/base/common/jsonSchema';
+import { IFileService } from 'vs/platform/files/common/files';
+import { IDialogService, IFileDialogService } from 'vs/platform/dialogs/common/dialogs';
+import { IWorkbenchEnvironmentService } from 'vs/workbench/services/environment/common/environmentService';
+import { IWorkspaceContextService } from 'vs/platform/workspace/common/workspace';
+import { firstOrDefault } from 'vs/base/common/arrays';
+import { ServicesAccessor } from 'vs/platform/instantiation/common/instantiation';
+import { Action2, registerAction2 } from 'vs/platform/actions/common/actions';
+import { CATEGORIES } from 'vs/workbench/common/actions';
+import { PersistentConnection } from 'vs/platform/remote/common/remoteAgentConnection';
 
 export class LabelContribution implements IWorkbenchContribution {
 	constructor(
@@ -86,12 +93,110 @@ class RemoteLogOutputChannels implements IWorkbenchContribution {
 	}
 }
 
+class RemoteInvalidWorkspaceDetector extends Disposable implements IWorkbenchContribution {
+
+	constructor(
+		@IFileService private readonly fileService: IFileService,
+		@IDialogService private readonly dialogService: IDialogService,
+		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
+		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
+		@IFileDialogService private readonly fileDialogService: IFileDialogService,
+		@IRemoteAgentService remoteAgentService: IRemoteAgentService
+	) {
+		super();
+
+		// When connected to a remote workspace, we currently cannot
+		// validate that the workspace exists before actually opening
+		// it. As such, we need to check on that after startup and guide
+		// the user to a valid workspace.
+		// (see https://github.com/microsoft/vscode/issues/133872)
+		if (this.environmentService.remoteAuthority) {
+			remoteAgentService.getEnvironment().then(remoteEnv => {
+				if (remoteEnv) {
+					// we use the presence of `remoteEnv` to figure out
+					// if we got a healthy remote connection
+					// (see https://github.com/microsoft/vscode/issues/135331)
+					this.validateRemoteWorkspace();
+				}
+			});
+		}
+	}
+
+	private async validateRemoteWorkspace(): Promise<void> {
+		const workspace = this.contextService.getWorkspace();
+		const workspaceUriToStat = workspace.configuration ?? firstOrDefault(workspace.folders)?.uri;
+		if (!workspaceUriToStat) {
+			return; // only when in workspace
+		}
+
+		const exists = await this.fileService.exists(workspaceUriToStat);
+		if (exists) {
+			return; // all good!
+		}
+
+		const res = await this.dialogService.confirm({
+			type: 'warning',
+			message: localize('invalidWorkspaceMessage', "Workspace does not exist"),
+			detail: localize('invalidWorkspaceDetail', "The workspace does not exist. Please select another workspace to open."),
+			primaryButton: localize('invalidWorkspacePrimary', "&&Open Workspace..."),
+			secondaryButton: localize('invalidWorkspaceCancel', "&&Cancel")
+		});
+
+		if (res.confirmed) {
+
+			// Pick Workspace
+			if (workspace.configuration) {
+				return this.fileDialogService.pickWorkspaceAndOpen({});
+			}
+
+			// Pick Folder
+			return this.fileDialogService.pickFolderAndOpen({});
+		}
+	}
+}
+
 const workbenchContributionsRegistry = Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench);
 workbenchContributionsRegistry.registerWorkbenchContribution(LabelContribution, LifecyclePhase.Starting);
 workbenchContributionsRegistry.registerWorkbenchContribution(RemoteChannelsContribution, LifecyclePhase.Starting);
+workbenchContributionsRegistry.registerWorkbenchContribution(RemoteInvalidWorkspaceDetector, LifecyclePhase.Starting);
 workbenchContributionsRegistry.registerWorkbenchContribution(RemoteLogOutputChannels, LifecyclePhase.Restored);
-workbenchContributionsRegistry.registerWorkbenchContribution(TunnelFactoryContribution, LifecyclePhase.Ready);
-workbenchContributionsRegistry.registerWorkbenchContribution(ShowCandidateContribution, LifecyclePhase.Ready);
+
+const enableDiagnostics = true;
+
+if (enableDiagnostics) {
+	class TriggerReconnectAction extends Action2 {
+		constructor() {
+			super({
+				id: 'workbench.action.triggerReconnect',
+				title: { value: localize('triggerReconnect', "Connection: Trigger Reconnect"), original: 'Connection: Trigger Reconnect' },
+				category: CATEGORIES.Developer,
+				f1: true,
+			});
+		}
+
+		async run(accessor: ServicesAccessor): Promise<void> {
+			PersistentConnection.debugTriggerReconnection();
+		}
+	}
+
+	class PauseSocketWriting extends Action2 {
+		constructor() {
+			super({
+				id: 'workbench.action.pauseSocketWriting',
+				title: { value: localize('pauseSocketWriting', "Connection: Pause socket writing"), original: 'Connection: Pause socket writing' },
+				category: CATEGORIES.Developer,
+				f1: true,
+			});
+		}
+
+		async run(accessor: ServicesAccessor): Promise<void> {
+			PersistentConnection.debugPauseSocketWriting();
+		}
+	}
+
+	registerAction2(TriggerReconnectAction);
+	registerAction2(PauseSocketWriting);
+}
 
 const extensionKindSchema: IJSONSchema = {
 	type: 'string',
@@ -150,7 +255,7 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration)
 			'remote.portsAttributes': {
 				type: 'object',
 				patternProperties: {
-					'(^\\d+(\\-\\d+)?$)|(.+)': {
+					'(^\\d+(-\\d+)?$)|(.+)': {
 						type: 'object',
 						description: localize('remote.portsAttributes.port', "A port, range of ports (ex. \"40000-55000\"), host and port (ex. \"db:1234\"), or regular expression (ex. \".+\\\\/server.js\").  For a port number or range, the attributes will apply to that port number or range of port numbers. Attributes which use a regular expression will apply to ports whose associated process command line matches the expression."),
 						properties: {

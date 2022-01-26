@@ -17,8 +17,8 @@ function workspaceFile(...segments: string[]) {
 
 const testDocument = workspaceFile('bower.json');
 
-// Disable webview tests on web
-(vscode.env.uiKind === vscode.UIKind.Web ? suite.skip : suite)('vscode API - webview', () => {
+
+suite('vscode API - webview', () => {
 	const disposables: vscode.Disposable[] = [];
 
 	function _register<T extends vscode.Disposable>(disposable: T) {
@@ -130,7 +130,7 @@ const testDocument = workspaceFile('bower.json');
 		assert.strictEqual(secondResponse.value, 1);
 	});
 
-	test('webviews should preserve their context when they are moved between view columns', async () => {
+	test.skip('webviews should preserve their context when they are moved between view columns', async () => { // TODO@mjbvz https://github.com/microsoft/vscode/issues/141001
 		const doc = await vscode.workspace.openTextDocument(testDocument);
 		await vscode.window.showTextDocument(doc, vscode.ViewColumn.One);
 
@@ -151,7 +151,9 @@ const testDocument = workspaceFile('bower.json');
 		assert.strictEqual(secondResponse.value, 1);
 	});
 
-	test('webviews with retainContextWhenHidden should preserve their context when they are hidden', async () => {
+	test.skip('webviews with retainContextWhenHidden should preserve their context when they are hidden', async function () {
+		this.retries(3);
+
 		const webview = _register(vscode.window.createWebviewPanel(webviewId, 'title', { viewColumn: vscode.ViewColumn.One }, { enableScripts: true, retainContextWhenHidden: true }));
 		const ready = getMessage(webview);
 
@@ -173,7 +175,7 @@ const testDocument = workspaceFile('bower.json');
 		assert.strictEqual(secondResponse.value, 1);
 	});
 
-	test('webviews with retainContextWhenHidden should preserve their page position when hidden', async () => {
+	test.skip('webviews with retainContextWhenHidden should preserve their page position when hidden', async () => {
 		const webview = _register(vscode.window.createWebviewPanel(webviewId, 'title', { viewColumn: vscode.ViewColumn.One }, { enableScripts: true, retainContextWhenHidden: true }));
 		const ready = getMessage(webview);
 		webview.webview.html = createHtmlDocumentWithBody(/*html*/`
@@ -240,7 +242,7 @@ const testDocument = workspaceFile('bower.json');
 	});
 
 
-	test('webviews should only be able to load resources from workspace by default', async () => {
+	test.skip('webviews should only be able to load resources from workspace by default', async () => { // TODO@mjbvz https://github.com/microsoft/vscode/issues/139960
 		const webview = _register(vscode.window.createWebviewPanel(webviewId, 'title', {
 			viewColumn: vscode.ViewColumn.One
 		}, {
@@ -263,15 +265,18 @@ const testDocument = workspaceFile('bower.json');
 					document.body.appendChild(img);
 				});
 
-				vscode.postMessage({ type: 'ready' });
+				vscode.postMessage({ type: 'ready', userAgent: window.navigator.userAgent });
 			</script>`);
 
 		const ready = getMessage(webview);
-		await ready;
+		if ((await ready).userAgent.indexOf('Firefox') >= 0) {
+			// Skip on firefox web for now.
+			// Firefox service workers never seem to get any 'fetch' requests here. Other browsers work fine
+			return;
+		}
 
 		{
 			const imagePath = webview.webview.asWebviewUri(workspaceFile('image.png'));
-			console.log(imagePath);
 			const response = await sendRecieveMessage(webview, { src: imagePath.toString() });
 			assert.strictEqual(response.value, true);
 		}
@@ -327,7 +332,7 @@ const testDocument = workspaceFile('bower.json');
 		}
 	});
 
-	test('webviews using hard-coded old style vscode-resource uri should work', async () => {
+	test.skip('webviews using hard-coded old style vscode-resource uri should work', async () => { // TODO@mjbvz https://github.com/microsoft/vscode/issues/139572
 		const webview = _register(vscode.window.createWebviewPanel(webviewId, 'title', { viewColumn: vscode.ViewColumn.One }, {
 			enableScripts: true,
 			localResourceRoots: [workspaceFile('sub')]
@@ -339,14 +344,22 @@ const testDocument = workspaceFile('bower.json');
 			<img src="${imagePath}">
 			<script>
 				const vscode = acquireVsCodeApi();
+				vscode.postMessage({ type: 'ready', userAgent: window.navigator.userAgent });
+
 				const img = document.getElementsByTagName('img')[0];
 				img.addEventListener('load', () => { vscode.postMessage({ value: true }); });
 				img.addEventListener('error', () => { vscode.postMessage({ value: false }); });
 			</script>`);
 
-		const firstResponse = getMessage(webview);
+		const ready = getMessage(webview);
+		if ((await ready).userAgent.indexOf('Firefox') >= 0) {
+			// Skip on firefox web for now.
+			// Firefox service workers never seem to get any 'fetch' requests here. Other browsers work fine
+			return;
+		}
+		const firstResponse = await sendRecieveMessage(webview, { src: imagePath.toString() });
 
-		assert.strictEqual((await firstResponse).value, true);
+		assert.strictEqual(firstResponse.value, true);
 	});
 
 	test('webviews should have real view column after they are created, #56097', async () => {

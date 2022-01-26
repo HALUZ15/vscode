@@ -5,12 +5,14 @@
 
 import * as strings from 'vs/base/common/strings';
 import { URI } from 'vs/base/common/uri';
+import { ExtensionKind } from 'vs/platform/environment/common/environment';
 import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
-import { ILocalization } from 'vs/platform/localizations/common/localizations';
+import { getRemoteName } from 'vs/platform/remote/common/remoteHosts';
 
 export const MANIFEST_CACHE_FOLDER = 'CachedExtensions';
 export const USER_MANIFEST_CACHE_FILE = 'user';
 export const BUILTIN_MANIFEST_CACHE_FILE = 'builtin';
+export const UNDEFINED_PUBLISHER = 'undefined_publisher';
 
 export interface ICommand {
 	command: string;
@@ -147,8 +149,28 @@ export interface IStartEntry {
 	readonly category: 'file' | 'folder' | 'notebook';
 }
 
+export interface INotebookEntry {
+	readonly type: string;
+	readonly displayName: string;
+}
+
 export interface INotebookRendererContribution {
 	readonly id: string;
+	readonly displayName: string;
+	readonly mimeTypes: string[];
+}
+
+export interface ITranslation {
+	id: string;
+	path: string;
+}
+
+export interface ILocalizationContribution {
+	languageId: string;
+	languageName?: string;
+	localizedLanguageName?: string;
+	translations: ITranslation[];
+	minimalTranslations?: { [key: string]: string };
 }
 
 export interface IExtensionContributions {
@@ -167,12 +189,13 @@ export interface IExtensionContributions {
 	viewsContainers?: { [location: string]: IViewContainer[] };
 	views?: { [location: string]: IView[] };
 	colors?: IColor[];
-	localizations?: ILocalization[];
+	localizations?: ILocalizationContribution[];
 	readonly customEditors?: readonly IWebviewEditor[];
 	readonly codeActions?: readonly ICodeActionContribution[];
 	authentication?: IAuthenticationContribution[];
 	walkthroughs?: IWalkthrough[];
 	startEntries?: IStartEntry[];
+	readonly notebooks?: INotebookEntry[];
 	readonly notebookRenderer?: INotebookRendererContribution[];
 }
 
@@ -183,7 +206,6 @@ export interface IExtensionCapabilities {
 
 
 export const ALL_EXTENSION_KINDS: readonly ExtensionKind[] = ['ui', 'workspace', 'web'];
-export type ExtensionKind = 'ui' | 'workspace' | 'web';
 
 export type LimitedWorkspaceSupportType = 'limited';
 export type ExtensionUntrustedWorkspaceSupportType = boolean | LimitedWorkspaceSupportType;
@@ -254,7 +276,7 @@ export interface IExtensionManifest {
 	readonly contributes?: IExtensionContributions;
 	readonly repository?: { url: string; };
 	readonly bugs?: { url: string; };
-	readonly enableProposedApi?: boolean;
+	readonly enabledApiProposals?: readonly string[];
 	readonly api?: string;
 	readonly scripts?: { [key: string]: string; };
 	readonly capabilities?: IExtensionCapabilities;
@@ -337,15 +359,22 @@ export interface IExtensionDescription extends IExtensionManifest {
 	readonly isUserBuiltin: boolean;
 	readonly isUnderDevelopment: boolean;
 	readonly extensionLocation: URI;
-	enableProposedApi?: boolean;
 }
 
 export function isLanguagePackExtension(manifest: IExtensionManifest): boolean {
 	return manifest.contributes && manifest.contributes.localizations ? manifest.contributes.localizations.length > 0 : false;
 }
 
-export function isAuthenticaionProviderExtension(manifest: IExtensionManifest): boolean {
+export function isAuthenticationProviderExtension(manifest: IExtensionManifest): boolean {
 	return manifest.contributes && manifest.contributes.authentication ? manifest.contributes.authentication.length > 0 : false;
+}
+
+export function isResolverExtension(manifest: IExtensionManifest, remoteAuthority: string | undefined): boolean {
+	if (remoteAuthority) {
+		const activationEvent = `onResolveRemoteAuthority:${getRemoteName(remoteAuthority)}`;
+		return manifest.activationEvents?.indexOf(activationEvent) !== -1;
+	}
+	return false;
 }
 
 export const IBuiltinExtensionsScannerService = createDecorator<IBuiltinExtensionsScannerService>('IBuiltinExtensionsScannerService');

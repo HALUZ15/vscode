@@ -8,9 +8,9 @@ import { ICommandHandlerDescription } from 'vs/platform/commands/common/commands
 import * as extHostTypes from 'vs/workbench/api/common/extHostTypes';
 import * as extHostTypeConverter from 'vs/workbench/api/common/extHostTypeConverters';
 import { cloneAndChange } from 'vs/base/common/objects';
-import { MainContext, MainThreadCommandsShape, ExtHostCommandsShape, ObjectIdentifier, ICommandDto } from './extHost.protocol';
+import { MainContext, MainThreadCommandsShape, ExtHostCommandsShape, ICommandDto, ICommandHandlerDescriptionDto } from './extHost.protocol';
 import { isNonEmptyArray } from 'vs/base/common/arrays';
-import * as modes from 'vs/editor/common/modes';
+import * as modes from 'vs/editor/common/languages';
 import type * as vscode from 'vscode';
 import { ILogService } from 'vs/platform/log/common/log';
 import { revive } from 'vs/base/common/marshalling';
@@ -24,11 +24,14 @@ import { ISelection } from 'vs/editor/common/core/selection';
 import { TestItemImpl } from 'vs/workbench/api/common/extHostTestingPrivateApi';
 import { VSBuffer } from 'vs/base/common/buffer';
 import { SerializableObjectWithBuffers } from 'vs/workbench/services/extensions/common/proxyIdentifier';
+import { toErrorMessage } from 'vs/base/common/errorMessage';
+import { IExtensionDescription } from 'vs/platform/extensions/common/extensions';
 
 interface CommandHandler {
 	callback: Function;
 	thisArg: any;
 	description?: ICommandHandlerDescription;
+	extension?: IExtensionDescription;
 }
 
 export interface ArgumentProcessor {
@@ -39,10 +42,11 @@ export class ExtHostCommands implements ExtHostCommandsShape {
 
 	readonly _serviceBrand: undefined;
 
+	#proxy: MainThreadCommandsShape;
+
 	private readonly _commands = new Map<string, CommandHandler>();
 	private readonly _apiCommands = new Map<string, ApiCommand>();
 
-	private readonly _proxy: MainThreadCommandsShape;
 	private readonly _logService: ILogService;
 	private readonly _argumentProcessors: ArgumentProcessor[];
 
@@ -52,7 +56,7 @@ export class ExtHostCommands implements ExtHostCommandsShape {
 		@IExtHostRpcService extHostRpc: IExtHostRpcService,
 		@ILogService logService: ILogService
 	) {
-		this._proxy = extHostRpc.getProxy(MainContext.MainThreadCommands);
+		this.#proxy = extHostRpc.getProxy(MainContext.MainThreadCommands);
 		this._logService = logService;
 		this.converter = new CommandsConverter(
 			this,
@@ -130,7 +134,7 @@ export class ExtHostCommands implements ExtHostCommandsShape {
 		});
 	}
 
-	registerCommand(global: boolean, id: string, callback: <T>(...args: any[]) => T | Thenable<T>, thisArg?: any, description?: ICommandHandlerDescription): extHostTypes.Disposable {
+	registerCommand(global: boolean, id: string, callback: <T>(...args: any[]) => T | Thenable<T>, thisArg?: any, description?: ICommandHandlerDescription, extension?: IExtensionDescription): extHostTypes.Disposable {
 		this._logService.trace('ExtHostCommands#registerCommand', id);
 
 		if (!id.trim().length) {
@@ -141,15 +145,15 @@ export class ExtHostCommands implements ExtHostCommandsShape {
 			throw new Error(`command '${id}' already exists`);
 		}
 
-		this._commands.set(id, { callback, thisArg, description });
+		this._commands.set(id, { callback, thisArg, description, extension });
 		if (global) {
-			this._proxy.$registerCommand(id);
+			this.#proxy.$registerCommand(id);
 		}
 
 		return new extHostTypes.Disposable(() => {
 			if (this._commands.delete(id)) {
 				if (global) {
-					this._proxy.$unregisterCommand(id);
+					this.#proxy.$unregisterCommand(id);
 				}
 			}
 		});
@@ -165,7 +169,7 @@ export class ExtHostCommands implements ExtHostCommandsShape {
 		if (this._commands.has(id)) {
 			// we stay inside the extension host and support
 			// to pass any kind of parameters around
-			return this._executeContributedCommand<T>(id, args);
+			return this._executeContributedCommand<T>(id, args, false);
 
 		} else {
 			// automagically convert some argument types
@@ -192,7 +196,7 @@ export class ExtHostCommands implements ExtHostCommandsShape {
 			});
 
 			try {
-				const result = await this._proxy.$executeCommand<T>(id, hasBuffers ? new SerializableObjectWithBuffers(toArgs) : toArgs, retry);
+				const result = await this.#proxy.$executeCommand(id, hasBuffers ? new SerializableObjectWithBuffers(toArgs) : toArgs, retry);
 				return revive<any>(result);
 			} catch (e) {
 				// Rerun the command when it wasn't known, had arguments, and when retry
@@ -207,7 +211,7 @@ export class ExtHostCommands implements ExtHostCommandsShape {
 		}
 	}
 
-	private async _executeContributedCommand<T>(id: string, args: any[]): Promise<T> {
+	private async _executeContributedCommand<T = unknown>(id: string, args: any[], annotateError: boolean): Promise<T> {
 		const command = this._commands.get(id);
 		if (!command) {
 			throw new Error('Unknown command');
@@ -234,26 +238,37 @@ export class ExtHostCommands implements ExtHostCommandsShape {
 					id = actual.command;
 				}
 			}
-			this._logService.error(err, id);
-			throw new Error(`Running the contributed command: '${id}' failed.`);
+			this._logService.error(err, id, command.extension?.identifier);
+
+			if (!annotateError) {
+				throw err;
+			}
+
+			throw new class CommandError extends Error {
+				readonly id = id;
+				readonly source = command!.extension?.displayName ?? command!.extension?.name;
+				constructor() {
+					super(toErrorMessage(err));
+				}
+			};
 		}
 	}
 
-	$executeContributedCommand<T>(id: string, ...args: any[]): Promise<T> {
+	$executeContributedCommand(id: string, ...args: any[]): Promise<unknown> {
 		this._logService.trace('ExtHostCommands#$executeContributedCommand', id);
 
 		if (!this._commands.has(id)) {
 			return Promise.reject(new Error(`Contributed command '${id}' does not exist.`));
 		} else {
 			args = args.map(arg => this._argumentProcessors.reduce((r, p) => p.processArgument(r), arg));
-			return this._executeContributedCommand(id, args);
+			return this._executeContributedCommand(id, args, true);
 		}
 	}
 
 	getCommands(filterUnderscoreCommands: boolean = false): Promise<string[]> {
 		this._logService.trace('ExtHostCommands#getCommands', filterUnderscoreCommands);
 
-		return this._proxy.$getCommands().then(result => {
+		return this.#proxy.$getCommands().then(result => {
 			if (filterUnderscoreCommands) {
 				result = result.filter(command => command[0] !== '_');
 			}
@@ -261,7 +276,7 @@ export class ExtHostCommands implements ExtHostCommandsShape {
 		});
 	}
 
-	$getContributedCommandHandlerDescriptions(): Promise<{ [id: string]: string | ICommandHandlerDescription }> {
+	$getContributedCommandHandlerDescriptions(): Promise<{ [id: string]: string | ICommandHandlerDescriptionDto }> {
 		const result: { [id: string]: string | ICommandHandlerDescription } = Object.create(null);
 		for (let [id, command] of this._commands) {
 			let { description } = command;
@@ -340,11 +355,10 @@ export class CommandsConverter {
 		return result;
 	}
 
-	fromInternal(command: modes.Command): vscode.Command | undefined {
+	fromInternal(command: ICommandDto): vscode.Command | undefined {
 
-		const id = ObjectIdentifier.of(command);
-		if (typeof id === 'number') {
-			return this._cache.get(id);
+		if (typeof command.$ident === 'number') {
+			return this._cache.get(command.$ident);
 
 		} else {
 			return {

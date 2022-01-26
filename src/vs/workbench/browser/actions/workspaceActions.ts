@@ -12,7 +12,7 @@ import { ICommandService } from 'vs/platform/commands/common/commands';
 import { ADD_ROOT_FOLDER_COMMAND_ID, ADD_ROOT_FOLDER_LABEL, PICK_WORKSPACE_FOLDER_COMMAND_ID } from 'vs/workbench/browser/actions/workspaceCommands';
 import { IFileDialogService } from 'vs/platform/dialogs/common/dialogs';
 import { MenuRegistry, MenuId, Action2, registerAction2, ILocalizedString } from 'vs/platform/actions/common/actions';
-import { EmptyWorkspaceSupportContext, EnterMultiRootWorkspaceSupportContext, OpenFolderWorkspaceSupportContext, WorkbenchStateContext, WorkspaceFolderCountContext } from 'vs/workbench/browser/contextkeys';
+import { EmptyWorkspaceSupportContext, EnterMultiRootWorkspaceSupportContext, OpenFolderWorkspaceSupportContext, WorkbenchStateContext, WorkspaceFolderCountContext } from 'vs/workbench/common/contextkeys';
 import { ServicesAccessor } from 'vs/platform/instantiation/common/instantiation';
 import { IHostService } from 'vs/workbench/services/host/browser/host';
 import { KeyChord, KeyCode, KeyMod } from 'vs/base/common/keyCodes';
@@ -38,7 +38,7 @@ export class OpenFileAction extends Action2 {
 			precondition: IsMacNativeContext.toNegated(),
 			keybinding: {
 				weight: KeybindingWeight.WorkbenchContrib,
-				primary: KeyMod.CtrlCmd | KeyCode.KEY_O
+				primary: KeyMod.CtrlCmd | KeyCode.KeyO
 			}
 		});
 	}
@@ -65,10 +65,10 @@ export class OpenFolderAction extends Action2 {
 				weight: KeybindingWeight.WorkbenchContrib,
 				primary: undefined,
 				linux: {
-					primary: KeyChord(KeyMod.CtrlCmd | KeyCode.KEY_K, KeyMod.CtrlCmd | KeyCode.KEY_O)
+					primary: KeyChord(KeyMod.CtrlCmd | KeyCode.KeyK, KeyMod.CtrlCmd | KeyCode.KeyO)
 				},
 				win: {
-					primary: KeyChord(KeyMod.CtrlCmd | KeyCode.KEY_K, KeyMod.CtrlCmd | KeyCode.KEY_O)
+					primary: KeyChord(KeyMod.CtrlCmd | KeyCode.KeyK, KeyMod.CtrlCmd | KeyCode.KeyO)
 				}
 			}
 		});
@@ -95,7 +95,7 @@ export class OpenFileFolderAction extends Action2 {
 			precondition: ContextKeyExpr.and(IsMacNativeContext, OpenFolderWorkspaceSupportContext),
 			keybinding: {
 				weight: KeybindingWeight.WorkbenchContrib,
-				primary: KeyMod.CtrlCmd | KeyCode.KEY_O
+				primary: KeyMod.CtrlCmd | KeyCode.KeyO
 			}
 		});
 	}
@@ -141,7 +141,7 @@ class CloseWorkspaceAction extends Action2 {
 			precondition: ContextKeyExpr.and(WorkbenchStateContext.notEqualsTo('empty'), EmptyWorkspaceSupportContext),
 			keybinding: {
 				weight: KeybindingWeight.WorkbenchContrib,
-				primary: KeyChord(KeyMod.CtrlCmd | KeyCode.KEY_K, KeyCode.KEY_F)
+				primary: KeyChord(KeyMod.CtrlCmd | KeyCode.KeyK, KeyCode.KeyF)
 			}
 		});
 	}
@@ -247,9 +247,10 @@ class SaveWorkspaceAsAction extends Action2 {
 		if (configPathUri && hasWorkspaceFileExtension(configPathUri)) {
 			switch (contextService.getWorkbenchState()) {
 				case WorkbenchState.EMPTY:
-				case WorkbenchState.FOLDER:
+				case WorkbenchState.FOLDER: {
 					const folders = contextService.getWorkspace().folders.map(folder => ({ uri: folder.uri }));
 					return workspaceEditingService.createAndEnterWorkspace(folders, configPathUri);
+				}
 				case WorkbenchState.WORKSPACE:
 					return workspaceEditingService.saveAndEnterWorkspace(configPathUri);
 			}
@@ -284,7 +285,7 @@ class DuplicateWorkspaceInNewWindowAction extends Action2 {
 		const newWorkspace = await workspacesService.createUntitledWorkspace(folders, remoteAuthority);
 		await workspaceEditingService.copyWorkspaceSettings(newWorkspace);
 
-		return hostService.openWindow([{ workspaceUri: newWorkspace.configPath }], { forceNewWindow: true });
+		return hostService.openWindow([{ workspaceUri: newWorkspace.configPath }], { forceNewWindow: true, remoteAuthority });
 	}
 }
 
@@ -321,6 +322,19 @@ MenuRegistry.appendMenuItem(MenuId.MenubarFileMenu, {
 	},
 	order: 2,
 	when: OpenFolderWorkspaceSupportContext
+});
+
+MenuRegistry.appendMenuItem(MenuId.MenubarFileMenu, {
+	group: '2_open',
+	command: {
+		// When we do not support opening folders/workspaces
+		// but we are in a workspace context, we add a
+		// "Open Folder" action that adds the folder as workspace
+		id: AddRootFolderAction.ID,
+		title: localize({ key: 'miOpenFolder', comment: ['&& denotes a mnemonic'] }, "Open &&Folder...")
+	},
+	order: 2,
+	when: ContextKeyExpr.and(OpenFolderWorkspaceSupportContext.toNegated(), WorkbenchStateContext.isEqualTo('workspace'))
 });
 
 MenuRegistry.appendMenuItem(MenuId.MenubarFileMenu, {

@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { EditorResourceAccessor, SideBySideEditor, IEditorInputWithPreferredResource, EditorInputCapabilities, isEditorIdentifier, IResourceDiffEditorInput, IUntitledTextResourceEditorInput, isResourceEditorInput, isUntitledResourceEditorInput, isResourceDiffEditorInput, isEditorInputWithOptionsAndGroup, IEditorInputWithOptions, isEditorInputWithOptions, isEditorInput, IEditorInputWithOptionsAndGroup, isResourceSideBySideEditorInput, IResourceSideBySideEditorInput } from 'vs/workbench/common/editor';
+import { EditorResourceAccessor, SideBySideEditor, EditorInputWithPreferredResource, EditorInputCapabilities, isEditorIdentifier, IResourceDiffEditorInput, IUntitledTextResourceEditorInput, isResourceEditorInput, isUntitledResourceEditorInput, isResourceDiffEditorInput, isEditorInputWithOptionsAndGroup, EditorInputWithOptions, isEditorInputWithOptions, isEditorInput, EditorInputWithOptionsAndGroup, isResourceSideBySideEditorInput, IResourceSideBySideEditorInput } from 'vs/workbench/common/editor';
 import { DiffEditorInput } from 'vs/workbench/common/editor/diffEditorInput';
 import { URI } from 'vs/base/common/uri';
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
@@ -23,7 +23,7 @@ import { EditorResolution, IResourceEditorInput } from 'vs/platform/editor/commo
 
 suite('Workbench editor utils', () => {
 
-	class TestEditorInputWithPreferredResource extends TestEditorInput implements IEditorInputWithPreferredResource {
+	class TestEditorInputWithPreferredResource extends TestEditorInput implements EditorInputWithPreferredResource {
 
 		constructor(resource: URI, public preferredResource: URI, typeId: string) {
 			super(resource, typeId);
@@ -38,7 +38,7 @@ suite('Workbench editor utils', () => {
 	let accessor: TestServiceAccessor;
 
 	async function createServices(): Promise<TestServiceAccessor> {
-		const instantiationService = workbenchInstantiationService();
+		const instantiationService = workbenchInstantiationService(undefined, disposables);
 
 		const part = await createEditorPart(instantiationService, disposables);
 		instantiationService.stub(IEditorGroupsService, part);
@@ -50,7 +50,7 @@ suite('Workbench editor utils', () => {
 	}
 
 	setup(() => {
-		instantiationService = workbenchInstantiationService();
+		instantiationService = workbenchInstantiationService(undefined, disposables);
 		accessor = instantiationService.createInstance(TestServiceAccessor);
 
 		disposables.add(registerTestFileEditor());
@@ -352,13 +352,13 @@ suite('Workbench editor utils', () => {
 		assert.strictEqual(isEditorInputWithOptions(editorInput), false);
 		assert.strictEqual(isEditorInputWithOptionsAndGroup(editorInput), false);
 
-		const editorInputWithOptions: IEditorInputWithOptions = { editor: editorInput, options: { override: EditorResolution.PICK } };
+		const editorInputWithOptions: EditorInputWithOptions = { editor: editorInput, options: { override: EditorResolution.PICK } };
 		assert.strictEqual(isEditorInput(editorInputWithOptions), false);
 		assert.strictEqual(isEditorInputWithOptions(editorInputWithOptions), true);
 		assert.strictEqual(isEditorInputWithOptionsAndGroup(editorInputWithOptions), false);
 
 		const service = accessor.editorGroupService;
-		const editorInputWithOptionsAndGroup: IEditorInputWithOptionsAndGroup = { editor: editorInput, options: { override: EditorResolution.PICK }, group: service.activeGroup };
+		const editorInputWithOptionsAndGroup: EditorInputWithOptionsAndGroup = { editor: editorInput, options: { override: EditorResolution.PICK }, group: service.activeGroup };
 		assert.strictEqual(isEditorInput(editorInputWithOptionsAndGroup), false);
 		assert.strictEqual(isEditorInputWithOptions(editorInputWithOptionsAndGroup), true);
 		assert.strictEqual(isEditorInputWithOptionsAndGroup(editorInputWithOptionsAndGroup), true);

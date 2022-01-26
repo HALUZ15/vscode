@@ -8,7 +8,7 @@ import { extname, isEqual } from 'vs/base/common/resources';
 import { URI } from 'vs/base/common/uri';
 import { ServicesAccessor } from 'vs/editor/browser/editorExtensions';
 import { Range } from 'vs/editor/common/core/range';
-import { ToggleCaseSensitiveKeybinding, ToggleRegexKeybinding, ToggleWholeWordKeybinding } from 'vs/editor/contrib/find/findModel';
+import { ToggleCaseSensitiveKeybinding, ToggleRegexKeybinding, ToggleWholeWordKeybinding } from 'vs/editor/contrib/find/browser/findModel';
 import { localize } from 'vs/nls';
 import { Action2, MenuId, registerAction2 } from 'vs/platform/actions/common/actions';
 import { CommandsRegistry } from 'vs/platform/commands/common/commands';
@@ -21,7 +21,8 @@ import { Registry } from 'vs/platform/registry/common/platform';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { EditorPaneDescriptor, IEditorPaneRegistry } from 'vs/workbench/browser/editor';
 import { Extensions as WorkbenchExtensions, IWorkbenchContribution, IWorkbenchContributionsRegistry } from 'vs/workbench/common/contributions';
-import { ActiveEditorContext, IEditorSerializer, IEditorFactoryRegistry, EditorExtensions, DEFAULT_EDITOR_ASSOCIATION } from 'vs/workbench/common/editor';
+import { IEditorSerializer, IEditorFactoryRegistry, EditorExtensions, DEFAULT_EDITOR_ASSOCIATION } from 'vs/workbench/common/editor';
+import { ActiveEditorContext } from 'vs/workbench/common/contextkeys';
 import { IViewsService } from 'vs/workbench/common/views';
 import { getSearchView } from 'vs/workbench/contrib/search/browser/searchActions';
 import { searchNewEditorIcon, searchRefreshIcon } from 'vs/workbench/contrib/search/browser/searchIcons';
@@ -325,7 +326,7 @@ registerAction2(class extends Action2 {
 			title: { value: localize('search.rerunSearchInEditor', "Search Again"), original: 'Search Again' },
 			category,
 			keybinding: {
-				primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KEY_R,
+				primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyR,
 				when: SearchEditorConstants.InSearchEditor,
 				weight: KeybindingWeight.EditorContrib
 			},
@@ -440,8 +441,8 @@ registerAction2(class extends Action2 {
 			precondition: SearchEditorConstants.InSearchEditor,
 			keybinding: {
 				weight: KeybindingWeight.WorkbenchContrib,
-				primary: KeyMod.Alt | KeyCode.KEY_L,
-				mac: { primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KEY_L }
+				primary: KeyMod.Alt | KeyCode.KeyL,
+				mac: { primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyL }
 			}
 		});
 	}
@@ -460,7 +461,7 @@ registerAction2(class extends Action2 {
 			precondition: SearchEditorConstants.InSearchEditor,
 			keybinding: {
 				weight: KeybindingWeight.WorkbenchContrib,
-				primary: KeyMod.Alt | KeyCode.US_EQUAL
+				primary: KeyMod.Alt | KeyCode.Equal
 			}
 		});
 	}
@@ -477,7 +478,7 @@ registerAction2(class extends Action2 {
 			precondition: SearchEditorConstants.InSearchEditor,
 			keybinding: {
 				weight: KeybindingWeight.WorkbenchContrib,
-				primary: KeyMod.Alt | KeyCode.US_MINUS
+				primary: KeyMod.Alt | KeyCode.Minus
 			}
 		});
 	}
@@ -494,7 +495,7 @@ registerAction2(class extends Action2 {
 			precondition: SearchEditorConstants.InSearchEditor,
 			keybinding: {
 				weight: KeybindingWeight.WorkbenchContrib,
-				primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KEY_L,
+				primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyL,
 			}
 		});
 	}

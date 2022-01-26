@@ -71,6 +71,9 @@ export namespace Schemas {
 
 	export const vscodeTerminal = 'vscode-terminal';
 
+	/**
+	 * Scheme used internally for webviews that aren't linked to a resource (i.e. not custom editors)
+	 */
 	export const webviewPanel = 'webview-panel';
 
 	/**
@@ -93,7 +96,15 @@ export namespace Schemas {
 	 * Scheme used for temporary resources
 	 */
 	export const tmp = 'tmp';
+
+	/**
+	 * Scheme used vs live share
+	 */
+	export const vsls = 'vsls';
 }
+
+export const connectionTokenCookieName = 'vscode-tkn';
+export const connectionTokenQueryName = 'tkn';
 
 class RemoteAuthoritiesImpl {
 	private readonly _hosts: { [authority: string]: string | undefined; } = Object.create(null);
@@ -132,7 +143,7 @@ class RemoteAuthoritiesImpl {
 		const connectionToken = this._connectionTokens[authority];
 		let query = `path=${encodeURIComponent(uri.path)}`;
 		if (typeof connectionToken === 'string') {
-			query += `&tkn=${encodeURIComponent(connectionToken)}`;
+			query += `&${connectionTokenQueryName}=${encodeURIComponent(connectionToken)}`;
 		}
 		return URI.from({
 			scheme: platform.isWeb ? this._preferredWebSchema : Schemas.vscodeRemoteResource,

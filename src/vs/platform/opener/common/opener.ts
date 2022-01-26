@@ -125,10 +125,28 @@ export const NullOpenerService = Object.freeze({
 	async resolveExternalUri(uri: URI) { return { resolved: uri, dispose() { } }; },
 } as IOpenerService);
 
-export function matchesScheme(target: URI | string, scheme: string) {
+export function matchesScheme(target: URI | string, scheme: string): boolean {
 	if (URI.isUri(target)) {
 		return equalsIgnoreCase(target.scheme, scheme);
 	} else {
 		return startsWithIgnoreCase(target, scheme + ':');
 	}
+}
+
+export function matchesSomeScheme(target: URI | string, ...schemes: string[]): boolean {
+	return schemes.some(scheme => matchesScheme(target, scheme));
+}
+
+export function selectionFragment(target: URI): { startLineNumber: number; startColumn: number; } | undefined {
+	let selection: { startLineNumber: number; startColumn: number; } | undefined = undefined;
+	const match = /^L?(\d+)(?:,(\d+))?/.exec(target.fragment);
+	if (match) {
+		// support file:///some/file.js#73,84
+		// support file:///some/file.js#L73
+		selection = {
+			startLineNumber: parseInt(match[1]),
+			startColumn: match[2] ? parseInt(match[2]) : 1
+		};
+	}
+	return selection;
 }

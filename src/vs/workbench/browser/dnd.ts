@@ -33,6 +33,8 @@ import { parse, stringify } from 'vs/base/common/marshalling';
 import { ILabelService } from 'vs/platform/label/common/label';
 import { IWorkspaceContextService } from 'vs/platform/workspace/common/workspace';
 import { withNullAsUndefined } from 'vs/base/common/types';
+import { ITreeDataTransfer } from 'vs/workbench/common/views';
+import { selectionFragment } from 'vs/platform/opener/common/opener';
 
 //#region Editor / Resources DND
 
@@ -46,6 +48,11 @@ export class DraggedEditorGroupIdentifier {
 	constructor(readonly identifier: GroupIdentifier) { }
 }
 
+export class DraggedTreeItemsIdentifier {
+
+	constructor(readonly identifier: string) { }
+}
+
 export const CodeDataTransfers = {
 	EDITORS: 'CodeEditors',
 	FILES: 'CodeFiles'
@@ -56,38 +63,27 @@ export interface IDraggedResourceEditorInput extends IBaseTextResourceEditorInpu
 	isExternal?: boolean;
 }
 
-export function extractEditorsDropData(e: DragEvent, externalOnly?: boolean): Array<IDraggedResourceEditorInput> {
+export function extractEditorsDropData(e: DragEvent): Array<IDraggedResourceEditorInput> {
 	const editors: IDraggedResourceEditorInput[] = [];
 	if (e.dataTransfer && e.dataTransfer.types.length > 0) {
 
-		// Check for window-to-window DND
-		if (!externalOnly) {
-
-			// Data Transfer: Code Editors
-			const rawEditorsData = e.dataTransfer.getData(CodeDataTransfers.EDITORS);
-			if (rawEditorsData) {
-				try {
-					editors.push(...parse(rawEditorsData));
-				} catch (error) {
-					// Invalid transfer
-				}
+		// Data Transfer: Code Editors
+		const rawEditorsData = e.dataTransfer.getData(CodeDataTransfers.EDITORS);
+		if (rawEditorsData) {
+			try {
+				editors.push(...parse(rawEditorsData));
+			} catch (error) {
+				// Invalid transfer
 			}
+		}
 
-			// Data Transfer: Resources
-			else {
-				try {
-					const rawResourcesData = e.dataTransfer.getData(DataTransfers.RESOURCES);
-					if (rawResourcesData) {
-						const resourcesRaw: string[] = JSON.parse(rawResourcesData);
-						for (const resourceRaw of resourcesRaw) {
-							if (resourceRaw.indexOf(':') > 0) { // mitigate https://github.com/microsoft/vscode/issues/124946
-								editors.push({ resource: URI.parse(resourceRaw) });
-							}
-						}
-					}
-				} catch (error) {
-					// Invalid transfer
-				}
+		// Data Transfer: Resources
+		else {
+			try {
+				const rawResourcesData = e.dataTransfer.getData(DataTransfers.RESOURCES);
+				editors.push(...createDraggedEditorInputFromRawResourcesData(rawResourcesData));
+			} catch (error) {
+				// Invalid transfer
 			}
 		}
 
@@ -131,6 +127,45 @@ export function extractEditorsDropData(e: DragEvent, externalOnly?: boolean): Ar
 			}
 		}
 	}
+
+	return editors;
+}
+
+function createDraggedEditorInputFromRawResourcesData(rawResourcesData: string | undefined): IDraggedResourceEditorInput[] {
+	const editors: IDraggedResourceEditorInput[] = [];
+
+	if (rawResourcesData) {
+		const resourcesRaw: string[] = JSON.parse(rawResourcesData);
+		for (const resourceRaw of resourcesRaw) {
+			if (resourceRaw.indexOf(':') > 0) { // mitigate https://github.com/microsoft/vscode/issues/124946
+				const resource = URI.parse(resourceRaw);
+				editors.push({
+					resource,
+					options: {
+						selection: selectionFragment(resource)
+					}
+				});
+			}
+		}
+	}
+
+	return editors;
+}
+
+export async function extractTreeDropData(dataTransfer: ITreeDataTransfer): Promise<Array<IDraggedResourceEditorInput>> {
+	const editors: IDraggedResourceEditorInput[] = [];
+	const resourcesKey = DataTransfers.RESOURCES.toLowerCase();
+
+	// Data Transfer: Resources
+	if (dataTransfer.has(resourcesKey)) {
+		try {
+			const rawResourcesData = await dataTransfer.get(resourcesKey)?.asString();
+			editors.push(...createDraggedEditorInputFromRawResourcesData(rawResourcesData));
+		} catch (error) {
+			// Invalid transfer
+		}
+	}
+	
 	return editors;
 }
 
@@ -326,7 +361,7 @@ export function fillEditorsDragData(accessor: ServicesAccessor, resourcesOrEdito
 
 		return resourceOrEditor;
 	}));
-	const fileSystemResources = resources.filter(({ resource }) => fileService.canHandleResource(resource));
+	const fileSystemResources = resources.filter(({ resource }) => fileService.hasProvider(resource));
 
 	// Text: allows to paste into text-capable areas
 	const lineDelimiter = isWindows ? '\r\n' : '\n';
@@ -387,9 +422,9 @@ export function fillEditorsDragData(accessor: ServicesAccessor, resourcesOrEdito
 				const textFileModel = textFileService.files.get(resource);
 				if (textFileModel) {
 
-					// mode
-					if (typeof editor.mode !== 'string') {
-						editor.mode = textFileModel.getMode();
+					// language
+					if (typeof editor.languageId !== 'string') {
+						editor.languageId = textFileModel.getLanguageId();
 					}
 
 					// encoding

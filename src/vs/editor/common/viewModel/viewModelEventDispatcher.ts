@@ -4,12 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { ViewEventHandler } from 'vs/editor/common/viewModel/viewEventHandler';
-import { ViewEvent } from 'vs/editor/common/view/viewEvents';
+import { ViewEvent } from 'vs/editor/common/viewModel/viewEvents';
 import { IContentSizeChangedEvent } from 'vs/editor/common/editorCommon';
 import { Emitter } from 'vs/base/common/event';
 import { Selection } from 'vs/editor/common/core/selection';
 import { Disposable } from 'vs/base/common/lifecycle';
-import { CursorChangeReason } from 'vs/editor/common/controller/cursorEvents';
+import { CursorChangeReason } from 'vs/editor/common/cursor/cursorEvents';
 
 export class ViewModelEventDispatcher extends Disposable {
 
@@ -171,11 +171,22 @@ export class ViewModelEventsCollector {
 	}
 }
 
+export type OutgoingViewModelEvent = (
+	ContentSizeChangedEvent
+	| FocusChangedEvent
+	| ScrollChangedEvent
+	| ViewZonesChangedEvent
+	| HiddenAreasChangedEvent
+	| ReadOnlyEditAttemptEvent
+	| CursorStateChangedEvent
+);
+
 export const enum OutgoingViewModelEventKind {
 	ContentSizeChanged,
 	FocusChanged,
 	ScrollChanged,
 	ViewZonesChanged,
+	HiddenAreasChanged,
 	ReadOnlyEditAttempt,
 	CursorStateChanged,
 }
@@ -308,6 +319,22 @@ export class ViewZonesChangedEvent {
 	}
 }
 
+export class HiddenAreasChangedEvent {
+
+	public readonly kind = OutgoingViewModelEventKind.HiddenAreasChanged;
+
+	constructor() {
+	}
+
+	public isNoOp(): boolean {
+		return false;
+	}
+
+	public merge(other: OutgoingViewModelEvent): HiddenAreasChangedEvent {
+		return this;
+	}
+}
+
 export class CursorStateChangedEvent {
 
 	public readonly kind = OutgoingViewModelEventKind.CursorStateChanged;
@@ -382,12 +409,3 @@ export class ReadOnlyEditAttemptEvent {
 		return this;
 	}
 }
-
-export type OutgoingViewModelEvent = (
-	ContentSizeChangedEvent
-	| FocusChangedEvent
-	| ScrollChangedEvent
-	| ViewZonesChangedEvent
-	| ReadOnlyEditAttemptEvent
-	| CursorStateChangedEvent
-);

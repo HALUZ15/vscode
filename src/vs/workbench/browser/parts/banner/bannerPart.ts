@@ -7,11 +7,11 @@ import 'vs/css!./media/bannerpart';
 import { localize } from 'vs/nls';
 import { $, addDisposableListener, append, asCSSUrl, clearNode, EventType } from 'vs/base/browser/dom';
 import { ActionBar } from 'vs/base/browser/ui/actionbar/actionbar';
-import { Codicon, registerCodicon } from 'vs/base/common/codicons';
+import { Codicon } from 'vs/base/common/codicons';
 import { registerSingleton } from 'vs/platform/instantiation/common/extensions';
 import { IInstantiationService, ServicesAccessor } from 'vs/platform/instantiation/common/instantiation';
 import { IStorageService } from 'vs/platform/storage/common/storage';
-import { IThemeService, registerThemingParticipant } from 'vs/platform/theme/common/themeService';
+import { IThemeService, registerThemingParticipant, ThemeIcon } from 'vs/platform/theme/common/themeService';
 import { Part } from 'vs/workbench/browser/part';
 import { IWorkbenchLayoutService, Parts } from 'vs/workbench/services/layout/browser/layoutService';
 import { Action } from 'vs/base/common/actions';
@@ -19,20 +19,16 @@ import { Link } from 'vs/platform/opener/browser/link';
 import { MarkdownString } from 'vs/base/common/htmlContent';
 import { Emitter } from 'vs/base/common/event';
 import { IBannerItem, IBannerService } from 'vs/workbench/services/banner/browser/bannerService';
-import { MarkdownRenderer } from 'vs/editor/browser/core/markdownRenderer';
+import { MarkdownRenderer } from 'vs/editor/contrib/markdownRenderer/browser/markdownRenderer';
 import { BANNER_BACKGROUND, BANNER_FOREGROUND, BANNER_ICON_FOREGROUND } from 'vs/workbench/common/theme';
 import { Action2, registerAction2 } from 'vs/platform/actions/common/actions';
 import { CATEGORIES } from 'vs/workbench/common/actions';
 import { KeybindingsRegistry, KeybindingWeight } from 'vs/platform/keybinding/common/keybindingsRegistry';
 import { KeyCode } from 'vs/base/common/keyCodes';
-import { IContextKeyService, RawContextKey } from 'vs/platform/contextkey/common/contextkey';
+import { IContextKeyService } from 'vs/platform/contextkey/common/contextkey';
 import { URI } from 'vs/base/common/uri';
-
-
-// Icons
-
-const bannerCloseIcon = registerCodicon('banner-close', Codicon.close);
-
+import { widgetClose } from 'vs/platform/theme/common/iconRegistry';
+import { BannerFocused } from 'vs/workbench/common/contextkeys';
 
 // Theme support
 
@@ -60,8 +56,6 @@ registerThemingParticipant((theme, collector) => {
 
 
 // Banner Part
-
-const CONTEXT_BANNER_FOCUSED = new RawContextKey<boolean>('bannerFocused', false, localize('bannerFocused', "Whether the banner has keyboard focus"));
 
 export class BannerPart extends Part implements IBannerService {
 
@@ -119,7 +113,7 @@ export class BannerPart extends Part implements IBannerService {
 
 		// Track focus
 		const scopedContextKeyService = this.contextKeyService.createScoped(this.element);
-		CONTEXT_BANNER_FOCUSED.bindTo(scopedContextKeyService).set(true);
+		BannerFocused.bindTo(scopedContextKeyService).set(true);
 
 		return this.element;
 	}
@@ -179,7 +173,7 @@ export class BannerPart extends Part implements IBannerService {
 			this.visible = visible;
 			this.focusedActionIndex = -1;
 
-			this.layoutService.setBannerHidden(!visible);
+			this.layoutService.setPartHidden(!visible, Parts.BANNER_PART);
 			this._onDidChangeSize.fire(undefined);
 		}
 	}
@@ -250,17 +244,14 @@ export class BannerPart extends Part implements IBannerService {
 			this.messageActionsContainer = append(this.element, $('div.message-actions-container'));
 
 			for (const action of item.actions) {
-				const actionLink = this._register(this.instantiationService.createInstance(Link, action, {}));
-				actionLink.el.tabIndex = -1;
-				actionLink.el.setAttribute('role', 'button');
-				this.messageActionsContainer.appendChild(actionLink.el);
+				this._register(this.instantiationService.createInstance(Link, this.messageActionsContainer, { ...action, tabIndex: -1 }, {}));
 			}
 		}
 
 		// Action
 		const actionBarContainer = append(this.element, $('div.action-container'));
 		this.actionBar = this._register(new ActionBar(actionBarContainer));
-		const closeAction = this._register(new Action('banner.close', 'Close Banner', bannerCloseIcon.classNames, true, () => this.close(item)));
+		const closeAction = this._register(new Action('banner.close', 'Close Banner', ThemeIcon.asClassName(widgetClose), true, () => this.close(item)));
 		this.actionBar.push(closeAction, { icon: true, label: false });
 		this.actionBar.setFocusable(false);
 
@@ -284,7 +275,7 @@ KeybindingsRegistry.registerCommandAndKeybindingRule({
 	id: 'workbench.banner.focusBanner',
 	weight: KeybindingWeight.WorkbenchContrib,
 	primary: KeyCode.Escape,
-	when: CONTEXT_BANNER_FOCUSED,
+	when: BannerFocused,
 	handler: (accessor: ServicesAccessor) => {
 		const bannerService = accessor.get(IBannerService);
 		bannerService.focus();
@@ -296,7 +287,7 @@ KeybindingsRegistry.registerCommandAndKeybindingRule({
 	weight: KeybindingWeight.WorkbenchContrib,
 	primary: KeyCode.RightArrow,
 	secondary: [KeyCode.DownArrow],
-	when: CONTEXT_BANNER_FOCUSED,
+	when: BannerFocused,
 	handler: (accessor: ServicesAccessor) => {
 		const bannerService = accessor.get(IBannerService);
 		bannerService.focusNextAction();
@@ -308,7 +299,7 @@ KeybindingsRegistry.registerCommandAndKeybindingRule({
 	weight: KeybindingWeight.WorkbenchContrib,
 	primary: KeyCode.LeftArrow,
 	secondary: [KeyCode.UpArrow],
-	when: CONTEXT_BANNER_FOCUSED,
+	when: BannerFocused,
 	handler: (accessor: ServicesAccessor) => {
 		const bannerService = accessor.get(IBannerService);
 		bannerService.focusPreviousAction();

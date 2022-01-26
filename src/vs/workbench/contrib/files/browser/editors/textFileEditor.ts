@@ -4,10 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { localize } from 'vs/nls';
-import { toErrorMessage } from 'vs/base/common/errorMessage';
 import { assertIsDefined } from 'vs/base/common/types';
-import { isValidBasename } from 'vs/base/common/extpath';
-import { basename } from 'vs/base/common/resources';
+import { IPathService } from 'vs/workbench/services/path/common/pathService';
 import { toAction } from 'vs/base/common/actions';
 import { VIEWLET_ID, TEXT_FILE_EDITOR_ID } from 'vs/workbench/contrib/files/common/files';
 import { ITextFileService, TextFileOperationError, TextFileOperationResult } from 'vs/workbench/services/textfile/common/textfiles';
@@ -17,12 +15,11 @@ import { EditorInput } from 'vs/workbench/common/editor/editorInput';
 import { applyTextEditorOptions } from 'vs/workbench/common/editor/editorOptions';
 import { BinaryEditorModel } from 'vs/workbench/common/editor/binaryEditorModel';
 import { FileEditorInput } from 'vs/workbench/contrib/files/browser/editors/fileEditorInput';
-import { IViewletService } from 'vs/workbench/services/viewlet/browser/viewlet';
 import { FileOperationError, FileOperationResult, FileChangesEvent, IFileService, FileOperationEvent, FileOperation } from 'vs/platform/files/common/files';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { IWorkspaceContextService } from 'vs/platform/workspace/common/workspace';
 import { IStorageService } from 'vs/platform/storage/common/storage';
-import { ITextResourceConfigurationService } from 'vs/editor/common/services/textResourceConfigurationService';
+import { ITextResourceConfigurationService } from 'vs/editor/common/services/textResourceConfiguration';
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
 import { IThemeService } from 'vs/platform/theme/common/themeService';
 import { ICodeEditorViewState, ScrollType } from 'vs/editor/common/editorCommon';
@@ -31,9 +28,11 @@ import { IEditorGroupsService } from 'vs/workbench/services/editor/common/editor
 import { CancellationToken } from 'vs/base/common/cancellation';
 import { IErrorWithActions } from 'vs/base/common/errors';
 import { EditorActivation, ITextEditorOptions } from 'vs/platform/editor/common/editor';
-import { IUriIdentityService } from 'vs/workbench/services/uriIdentity/common/uriIdentity';
+import { IUriIdentityService } from 'vs/platform/uriIdentity/common/uriIdentity';
 import { IExplorerService } from 'vs/workbench/contrib/files/browser/files';
 import { MutableDisposable } from 'vs/base/common/lifecycle';
+import { IPaneCompositePartService } from 'vs/workbench/services/panecomposite/browser/panecomposite';
+import { ViewContainerLocation } from 'vs/workbench/common/views';
 
 /**
  * An implementation of editor for file system resources.
@@ -47,7 +46,7 @@ export class TextFileEditor extends BaseTextEditor<ICodeEditorViewState> {
 	constructor(
 		@ITelemetryService telemetryService: ITelemetryService,
 		@IFileService private readonly fileService: IFileService,
-		@IViewletService private readonly viewletService: IViewletService,
+		@IPaneCompositePartService private readonly paneCompositeService: IPaneCompositePartService,
 		@IInstantiationService instantiationService: IInstantiationService,
 		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
 		@IStorageService storageService: IStorageService,
@@ -57,7 +56,8 @@ export class TextFileEditor extends BaseTextEditor<ICodeEditorViewState> {
 		@IEditorGroupsService editorGroupService: IEditorGroupsService,
 		@ITextFileService private readonly textFileService: ITextFileService,
 		@IExplorerService private readonly explorerService: IExplorerService,
-		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService
+		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
+		@IPathService private readonly pathService: IPathService
 	) {
 		super(TextFileEditor.ID, telemetryService, instantiationService, storageService, textResourceConfigurationService, themeService, editorService, editorGroupService);
 
@@ -73,11 +73,8 @@ export class TextFileEditor extends BaseTextEditor<ICodeEditorViewState> {
 	}
 
 	private onDidFilesChange(e: FileChangesEvent): void {
-		const deleted = e.rawDeleted;
-		if (deleted) {
-			for (const [resource] of deleted) {
-				this.clearEditorViewState(resource);
-			}
+		for (const resource of e.rawDeleted) {
+			this.clearEditorViewState(resource);
 		}
 	}
 
@@ -160,11 +157,11 @@ export class TextFileEditor extends BaseTextEditor<ICodeEditorViewState> {
 			// readonly or not that the input did not have.
 			textEditor.updateOptions({ readOnly: textFileModel.isReadonly() });
 		} catch (error) {
-			this.handleSetInputError(error, input, options);
+			await this.handleSetInputError(error, input, options);
 		}
 	}
 
-	protected handleSetInputError(error: Error, input: FileEditorInput, options: ITextEditorOptions | undefined): void {
+	protected async handleSetInputError(error: Error, input: FileEditorInput, options: ITextEditorOptions | undefined): Promise<void> {
 
 		// In case we tried to open a file inside the text editor and the response
 		// indicates that this is not a text file, reopen the file through the binary
@@ -181,8 +178,8 @@ export class TextFileEditor extends BaseTextEditor<ICodeEditorViewState> {
 		}
 
 		// Offer to create a file from the error if we have a file not found and the name is valid
-		if ((<FileOperationError>error).fileOperationResult === FileOperationResult.FILE_NOT_FOUND && isValidBasename(basename(input.preferredResource))) {
-			const fileNotFoundError: FileOperationError & IErrorWithActions = new FileOperationError(toErrorMessage(error), FileOperationResult.FILE_NOT_FOUND);
+		if ((<FileOperationError>error).fileOperationResult === FileOperationResult.FILE_NOT_FOUND && await this.pathService.hasValidBasename(input.preferredResource)) {
+			const fileNotFoundError: FileOperationError & IErrorWithActions = new FileOperationError(localize('fileNotFoundError', "File not found"), FileOperationResult.FILE_NOT_FOUND);
 			fileNotFoundError.actions = [
 				toAction({
 					id: 'workbench.files.action.createMissingFile', label: localize('createFile', "Create File"), run: async () => {
@@ -231,7 +228,7 @@ export class TextFileEditor extends BaseTextEditor<ICodeEditorViewState> {
 
 		// Best we can do is to reveal the folder in the explorer
 		if (this.contextService.isInsideWorkspace(input.preferredResource)) {
-			await this.viewletService.openViewlet(VIEWLET_ID);
+			await this.paneCompositeService.openPaneComposite(VIEWLET_ID, ViewContainerLocation.Sidebar);
 
 			this.explorerService.select(input.preferredResource, true);
 		}

@@ -16,9 +16,9 @@ import { createDecorator } from 'vs/platform/instantiation/common/instantiation'
 import { ITelemetryData } from 'vs/platform/telemetry/common/telemetry';
 import { Event } from 'vs/base/common/event';
 import * as paths from 'vs/base/common/path';
-import { isPromiseCanceledError } from 'vs/base/common/errors';
+import { isCancellationError } from 'vs/base/common/errors';
 import { TextSearchCompleteMessageType } from 'vs/workbench/services/search/common/searchExtTypes';
-import { isPromise } from 'vs/base/common/types';
+import { isThenable } from 'vs/base/common/async';
 
 export { TextSearchCompleteMessageType };
 
@@ -69,6 +69,7 @@ export interface IFolderQuery<U extends UriComponents = URI> {
 	fileEncoding?: string;
 	disregardIgnoreFiles?: boolean;
 	disregardGlobalIgnoreFiles?: boolean;
+	disregardParentIgnoreFiles?: boolean;
 	ignoreSymlinks?: boolean;
 }
 
@@ -221,7 +222,7 @@ export interface ISearchCompleteStats {
 
 export interface ISearchComplete extends ISearchCompleteStats {
 	results: IFileMatch[];
-	exit?: SearchCompletionExitCode
+	exit?: SearchCompletionExitCode;
 }
 
 export const enum SearchCompletionExitCode {
@@ -364,6 +365,7 @@ export interface ISearchConfigurationProperties {
 	 */
 	useIgnoreFiles: boolean;
 	useGlobalIgnoreFiles: boolean;
+	useParentIgnoreFiles: boolean;
 	followSymlinks: boolean;
 	smartCase: boolean;
 	globalFindClipboard: boolean;
@@ -384,12 +386,9 @@ export interface ISearchConfigurationProperties {
 		doubleClickBehaviour: 'selectWord' | 'goToLocation' | 'openLocationToSide',
 		reusePriorSearchConfiguration: boolean,
 		defaultNumberOfContextLines: number | null,
-		experimental: {}
+		experimental: {};
 	};
 	sortOrder: SearchSortOrder;
-	experimental: {
-		forceExtensionHostSearch: boolean;
-	}
 }
 
 export interface ISearchConfiguration extends IFilesConfiguration {
@@ -467,7 +466,7 @@ export class SearchError extends Error {
 export function deserializeSearchError(error: Error): SearchError {
 	const errorMsg = error.message;
 
-	if (isPromiseCanceledError(error)) {
+	if (isCancellationError(error)) {
 		return new SearchError(errorMsg, SearchErrorCode.canceled);
 	}
 
@@ -533,7 +532,7 @@ export interface ISerializedSearchError {
 	type: 'error';
 	error: {
 		message: string,
-		stack: string
+		stack: string;
 	};
 }
 
@@ -643,6 +642,14 @@ export class QueryGlobTester {
 		}
 	}
 
+	matchesExcludesSync(testPath: string, basename?: string, hasSibling?: (name: string) => boolean): boolean {
+		if (this._parsedExcludeExpression && this._parsedExcludeExpression(testPath, basename, hasSibling)) {
+			return true;
+		}
+
+		return false;
+	}
+
 	/**
 	 * Guaranteed sync - siblingsFn should not return a promise.
 	 */
@@ -671,7 +678,7 @@ export class QueryGlobTester {
 				true;
 		};
 
-		if (isPromise(excluded)) {
+		if (isThenable(excluded)) {
 			return excluded.then(excluded => {
 				if (excluded) {
 					return false;

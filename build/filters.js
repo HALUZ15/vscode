@@ -24,6 +24,36 @@ module.exports.all = [
 	'!**/node_modules/**',
 ];
 
+module.exports.unicodeFilter = [
+	'**',
+
+	'!**/ThirdPartyNotices.txt',
+	'!**/LICENSE.{txt,rtf}',
+	'!LICENSES.chromium.html',
+	'!**/LICENSE',
+
+	'!**/*.{dll,exe,png,bmp,jpg,scpt,cur,ttf,woff,eot,template,ico,icns,opus}',
+	'!**/test/**',
+	'!**/*.test.ts',
+	'!**/*.{d.ts,json,md}',
+
+	'!build/win32/**',
+	'!extensions/markdown-language-features/notebook-out/*.js',
+	'!extensions/markdown-math/notebook-out/**',
+	'!extensions/php-language-features/src/features/phpGlobalFunctions.ts',
+	'!extensions/typescript-language-features/test-workspace/**',
+	'!extensions/vscode-api-tests/testWorkspace/**',
+	'!extensions/vscode-api-tests/testWorkspace2/**',
+	'!extensions/vscode-custom-editor-tests/test-workspace/**',
+	'!extensions/**/dist/**',
+	'!extensions/**/out/**',
+	'!extensions/**/snippets/**',
+	'!extensions/**/colorize-fixtures/**',
+
+	'!src/vs/base/browser/dompurify/**',
+	'!src/vs/workbench/services/keybinding/browser/keyboardLayouts/**',
+];
+
 module.exports.indentationFilter = [
 	'**',
 
@@ -78,7 +108,7 @@ module.exports.indentationFilter = [
 	'!src/vs/*/**/*.d.ts',
 	'!src/typings/**/*.d.ts',
 	'!extensions/**/*.d.ts',
-	'!**/*.{svg,exe,png,bmp,jpg,scpt,bat,cmd,cur,ttf,woff,eot,md,ps1,template,yaml,yml,d.ts.recipe,ico,icns,plist}',
+	'!**/*.{svg,exe,png,bmp,jpg,scpt,bat,cmd,cur,ttf,woff,eot,md,ps1,template,yaml,yml,d.ts.recipe,ico,icns,plist,opus}',
 	'!build/{lib,download,linux,darwin}/**/*.js',
 	'!build/**/*.sh',
 	'!build/azure-pipelines/**/*.js',
@@ -103,6 +133,7 @@ module.exports.copyrightFilter = [
 	'!**/*.bat',
 	'!**/*.cmd',
 	'!**/*.ico',
+	'!**/*.opus',
 	'!**/*.icns',
 	'!**/*.xml',
 	'!**/*.sh',
@@ -116,7 +147,6 @@ module.exports.copyrightFilter = [
 	'!build/linux/libcxx-fetcher.*',
 	'!resources/linux/snap/snapcraft.yaml',
 	'!resources/win32/bin/code.js',
-	'!resources/web/code-web.js',
 	'!resources/completions/**',
 	'!extensions/configuration-editing/build/inline-allOf.ts',
 	'!extensions/markdown-language-features/media/highlight.css',

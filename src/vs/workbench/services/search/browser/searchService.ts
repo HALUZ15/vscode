@@ -4,21 +4,21 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { CancellationToken } from 'vs/base/common/cancellation';
-import { IModelService } from 'vs/editor/common/services/modelService';
+import { IModelService } from 'vs/editor/common/services/model';
 import { IFileService } from 'vs/platform/files/common/files';
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
 import { ILogService } from 'vs/platform/log/common/log';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { IEditorService } from 'vs/workbench/services/editor/common/editorService';
 import { IExtensionService } from 'vs/workbench/services/extensions/common/extensions';
-import { IFileMatch, IFileQuery, ISearchComplete, ISearchProgressItem, ISearchResultProvider, ISearchService, ITextQuery, TextSearchCompleteMessageType } from 'vs/workbench/services/search/common/search';
+import { IFileMatch, IFileQuery, ISearchComplete, ISearchProgressItem, ISearchResultProvider, ISearchService, ITextQuery, SearchProviderType, TextSearchCompleteMessageType } from 'vs/workbench/services/search/common/search';
 import { SearchService } from 'vs/workbench/services/search/common/searchService';
-import { IUriIdentityService } from 'vs/workbench/services/uriIdentity/common/uriIdentity';
+import { IUriIdentityService } from 'vs/platform/uriIdentity/common/uriIdentity';
 import { IWorkerClient, logOnceWebWorkerWarning, SimpleWorkerClient } from 'vs/base/common/worker/simpleWorker';
 import { Disposable, DisposableStore } from 'vs/base/common/lifecycle';
-import { DefaultWorkerFactory } from 'vs/base/worker/defaultWorkerFactory';
+import { DefaultWorkerFactory } from 'vs/base/browser/defaultWorkerFactory';
 import { registerSingleton } from 'vs/platform/instantiation/common/extensions';
-import { ILocalFileSearchSimpleWorker, ILocalFileSearchSimpleWorkerHost } from 'vs/workbench/services/search/common/localFileSearchWorkerTypes';
+import { ILocalFileSearchSimpleWorker, ILocalFileSearchSimpleWorkerHost, SearchWorkerFileSystemHandle } from 'vs/workbench/services/search/common/localFileSearchWorkerTypes';
 import { memoize } from 'vs/base/common/decorators';
 import { HTMLFileSystemProvider } from 'vs/platform/files/browser/htmlFileSystemProvider';
 import { Schemas } from 'vs/base/common/network';
@@ -38,7 +38,9 @@ export class RemoteSearchService extends SearchService {
 		@IUriIdentityService uriIdentityService: IUriIdentityService,
 	) {
 		super(modelService, editorService, telemetryService, logService, extensionService, fileService, uriIdentityService);
-		this.diskSearch = this.instantiationService.createInstance(LocalFileSearchWorkerClient);
+		const searchProvider = this.instantiationService.createInstance(LocalFileSearchWorkerClient);
+		this.registerSearchResultProvider(Schemas.file, SearchProviderType.file, searchProvider);
+		this.registerSearchResultProvider(Schemas.file, SearchProviderType.text, searchProvider);
 	}
 }
 
@@ -89,7 +91,7 @@ export class LocalFileSearchWorkerClient extends Disposable implements ISearchRe
 				const queryId = this.queryId++;
 				queryDisposables.add(token?.onCancellationRequested(e => this.cancelQuery(queryId)) || Disposable.None);
 
-				const handle = await this.fileSystemProvider.getHandle(fq.folder);
+				const handle: SearchWorkerFileSystemHandle | undefined = await this.fileSystemProvider.getHandle(fq.folder);
 				if (!handle || handle.kind !== 'directory') {
 					console.error('Could not get directory handle for ', fq);
 					return;
@@ -142,7 +144,7 @@ export class LocalFileSearchWorkerClient extends Disposable implements ISearchRe
 				const queryId = this.queryId++;
 				queryDisposables.add(token?.onCancellationRequested(e => this.cancelQuery(queryId)) || Disposable.None);
 
-				const handle = await this.fileSystemProvider.getHandle(fq.folder);
+				const handle: SearchWorkerFileSystemHandle | undefined = await this.fileSystemProvider.getHandle(fq.folder);
 				if (!handle || handle.kind !== 'directory') {
 					console.error('Could not get directory handle for ', fq);
 					return;

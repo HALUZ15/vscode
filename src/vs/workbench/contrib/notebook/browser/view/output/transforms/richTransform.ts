@@ -6,9 +6,7 @@
 import * as DOM from 'vs/base/browser/dom';
 import { Disposable, DisposableStore, toDisposable } from 'vs/base/common/lifecycle';
 import { Mimes } from 'vs/base/common/mime';
-import { dirname } from 'vs/base/common/resources';
 import { URI } from 'vs/base/common/uri';
-import { MarkdownRenderer } from 'vs/editor/browser/core/markdownRenderer';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
 import { ILogService } from 'vs/platform/log/common/log';
@@ -16,13 +14,13 @@ import { IOpenerService } from 'vs/platform/opener/common/opener';
 import { IThemeService } from 'vs/platform/theme/common/themeService';
 import { handleANSIOutput } from 'vs/workbench/contrib/debug/browser/debugANSIHandling';
 import { LinkDetector } from 'vs/workbench/contrib/debug/browser/linkDetector';
-import { ICellOutputViewModel, ICommonNotebookEditorDelegate, IOutputTransformContribution as IOutputRendererContribution, IRenderOutput, RenderOutputType } from 'vs/workbench/contrib/notebook/browser/notebookBrowser';
+import { ICellOutputViewModel, IOutputTransformContribution, IRenderOutput, RenderOutputType } from 'vs/workbench/contrib/notebook/browser/notebookBrowser';
+import { INotebookDelegateForOutput } from 'vs/workbench/contrib/notebook/browser/view/notebookRenderingCommon';
 import { OutputRendererRegistry } from 'vs/workbench/contrib/notebook/browser/view/output/rendererRegistry';
 import { truncatedArrayOfString } from 'vs/workbench/contrib/notebook/browser/view/output/transforms/textHelper';
-import { IOutputItemDto, TextOutputLineLimit } from 'vs/workbench/contrib/notebook/common/notebookCommon';
+import { IOutputItemDto, NotebookSetting } from 'vs/workbench/contrib/notebook/common/notebookCommon';
 
-
-class JavaScriptRendererContrib extends Disposable implements IOutputRendererContribution {
+class JavaScriptRendererContrib extends Disposable implements IOutputTransformContribution {
 	getType() {
 		return RenderOutputType.Html;
 	}
@@ -32,7 +30,7 @@ class JavaScriptRendererContrib extends Disposable implements IOutputRendererCon
 	}
 
 	constructor(
-		public notebookEditor: ICommonNotebookEditorDelegate,
+		public notebookEditor: INotebookDelegateForOutput,
 	) {
 		super();
 	}
@@ -50,7 +48,7 @@ class JavaScriptRendererContrib extends Disposable implements IOutputRendererCon
 	}
 }
 
-class StreamRendererContrib extends Disposable implements IOutputRendererContribution {
+class StreamRendererContrib extends Disposable implements IOutputTransformContribution {
 	getType() {
 		return RenderOutputType.Mainframe;
 	}
@@ -60,7 +58,7 @@ class StreamRendererContrib extends Disposable implements IOutputRendererContrib
 	}
 
 	constructor(
-		public notebookEditor: ICommonNotebookEditorDelegate,
+		public notebookEditor: INotebookDelegateForOutput,
 		@IOpenerService private readonly openerService: IOpenerService,
 		@IThemeService private readonly themeService: IThemeService,
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
@@ -75,8 +73,8 @@ class StreamRendererContrib extends Disposable implements IOutputRendererContrib
 
 		const text = getStringValue(item);
 		const contentNode = DOM.$('span.output-stream');
-		const lineLimit = this.configurationService.getValue<number>(TextOutputLineLimit) ?? 30;
-		truncatedArrayOfString(notebookUri, output.cellViewModel, Math.max(lineLimit, 6), contentNode, [text], disposables, linkDetector, this.openerService, this.themeService);
+		const lineLimit = this.configurationService.getValue<number>(NotebookSetting.textOutputLineLimit) ?? 30;
+		truncatedArrayOfString(notebookUri, output.cellViewModel, output.model.outputId, Math.max(lineLimit, 6), contentNode, [text], disposables, linkDetector, this.openerService, this.themeService);
 		container.appendChild(contentNode);
 
 		return { type: RenderOutputType.Mainframe, disposable: disposables };
@@ -99,10 +97,10 @@ class StderrRendererContrib extends StreamRendererContrib {
 	}
 }
 
-class JSErrorRendererContrib implements IOutputRendererContribution {
+class JSErrorRendererContrib implements IOutputTransformContribution {
 
 	constructor(
-		public notebookEditor: ICommonNotebookEditorDelegate,
+		public notebookEditor: INotebookDelegateForOutput,
 		@IThemeService private readonly _themeService: IThemeService,
 		@IInstantiationService private readonly _instantiationService: IInstantiationService,
 		@ILogService private readonly _logService: ILogService,
@@ -134,25 +132,27 @@ class JSErrorRendererContrib implements IOutputRendererContribution {
 			return { type: RenderOutputType.Mainframe };
 		}
 
-		const header = document.createElement('div');
-		const headerMessage = err.name && err.message ? `${err.name}: ${err.message}` : err.name || err.message;
-		if (headerMessage) {
-			header.innerText = headerMessage;
-			container.appendChild(header);
-		}
-		const stack = document.createElement('pre');
-		stack.classList.add('traceback');
 		if (err.stack) {
+			const stack = document.createElement('pre');
+			stack.classList.add('traceback');
 			stack.appendChild(handleANSIOutput(err.stack, linkDetector, this._themeService, undefined));
+			container.appendChild(stack);
+		} else {
+			const header = document.createElement('div');
+			const headerMessage = err.name && err.message ? `${err.name}: ${err.message}` : err.name || err.message;
+			if (headerMessage) {
+				header.innerText = headerMessage;
+				container.appendChild(header);
+			}
 		}
-		container.appendChild(stack);
+
 		container.classList.add('error');
 
 		return { type: RenderOutputType.Mainframe };
 	}
 }
 
-class PlainTextRendererContrib extends Disposable implements IOutputRendererContribution {
+class PlainTextRendererContrib extends Disposable implements IOutputTransformContribution {
 	getType() {
 		return RenderOutputType.Mainframe;
 	}
@@ -162,7 +162,7 @@ class PlainTextRendererContrib extends Disposable implements IOutputRendererCont
 	}
 
 	constructor(
-		public notebookEditor: ICommonNotebookEditorDelegate,
+		public notebookEditor: INotebookDelegateForOutput,
 		@IOpenerService private readonly openerService: IOpenerService,
 		@IThemeService private readonly themeService: IThemeService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
@@ -177,15 +177,15 @@ class PlainTextRendererContrib extends Disposable implements IOutputRendererCont
 
 		const str = getStringValue(item);
 		const contentNode = DOM.$('.output-plaintext');
-		const lineLimit = this.configurationService.getValue<number>(TextOutputLineLimit) ?? 30;
-		truncatedArrayOfString(notebookUri, output.cellViewModel, Math.max(lineLimit, 6), contentNode, [str], disposables, linkDetector, this.openerService, this.themeService);
+		const lineLimit = this.configurationService.getValue<number>(NotebookSetting.textOutputLineLimit) ?? 30;
+		truncatedArrayOfString(notebookUri, output.cellViewModel, output.model.outputId, Math.max(lineLimit, 6), contentNode, [str], disposables, linkDetector, this.openerService, this.themeService);
 		container.appendChild(contentNode);
 
 		return { type: RenderOutputType.Mainframe, supportAppend: true, disposable: disposables };
 	}
 }
 
-class HTMLRendererContrib extends Disposable implements IOutputRendererContribution {
+class HTMLRendererContrib extends Disposable implements IOutputTransformContribution {
 	getType() {
 		return RenderOutputType.Html;
 	}
@@ -195,7 +195,7 @@ class HTMLRendererContrib extends Disposable implements IOutputRendererContribut
 	}
 
 	constructor(
-		public notebookEditor: ICommonNotebookEditorDelegate,
+		public notebookEditor: INotebookDelegateForOutput,
 	) {
 		super();
 	}
@@ -210,35 +210,7 @@ class HTMLRendererContrib extends Disposable implements IOutputRendererContribut
 	}
 }
 
-class MdRendererContrib extends Disposable implements IOutputRendererContribution {
-	getType() {
-		return RenderOutputType.Mainframe;
-	}
-
-	getMimetypes() {
-		return [Mimes.markdown];
-	}
-
-	constructor(
-		public notebookEditor: ICommonNotebookEditorDelegate,
-		@IInstantiationService private readonly instantiationService: IInstantiationService,
-	) {
-		super();
-	}
-
-	render(output: ICellOutputViewModel, item: IOutputItemDto, container: HTMLElement, notebookUri: URI): IRenderOutput {
-		const disposable = new DisposableStore();
-		const str = getStringValue(item);
-		const mdOutput = document.createElement('div');
-		const mdRenderer = this.instantiationService.createInstance(MarkdownRenderer, { baseUrl: dirname(notebookUri) });
-		mdOutput.appendChild(mdRenderer.render({ value: str, isTrusted: true, supportThemeIcons: true }, undefined, { gfm: true }).element);
-		container.appendChild(mdOutput);
-		disposable.add(mdRenderer);
-		return { type: RenderOutputType.Mainframe, disposable };
-	}
-}
-
-class ImgRendererContrib extends Disposable implements IOutputRendererContribution {
+class ImgRendererContrib extends Disposable implements IOutputTransformContribution {
 	getType() {
 		return RenderOutputType.Mainframe;
 	}
@@ -248,7 +220,7 @@ class ImgRendererContrib extends Disposable implements IOutputRendererContributi
 	}
 
 	constructor(
-		public notebookEditor: ICommonNotebookEditorDelegate,
+		public notebookEditor: INotebookDelegateForOutput,
 	) {
 		super();
 	}
@@ -273,7 +245,6 @@ class ImgRendererContrib extends Disposable implements IOutputRendererContributi
 
 OutputRendererRegistry.registerOutputTransform(JavaScriptRendererContrib);
 OutputRendererRegistry.registerOutputTransform(HTMLRendererContrib);
-OutputRendererRegistry.registerOutputTransform(MdRendererContrib);
 OutputRendererRegistry.registerOutputTransform(ImgRendererContrib);
 OutputRendererRegistry.registerOutputTransform(PlainTextRendererContrib);
 OutputRendererRegistry.registerOutputTransform(JSErrorRendererContrib);

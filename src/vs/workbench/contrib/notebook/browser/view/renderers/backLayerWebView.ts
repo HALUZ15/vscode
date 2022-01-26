@@ -3,17 +3,22 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { IMouseWheelEvent } from 'vs/base/browser/mouseEvent';
 import { IAction } from 'vs/base/common/actions';
 import { coalesce } from 'vs/base/common/arrays';
-import { VSBuffer } from 'vs/base/common/buffer';
+import { decodeBase64 } from 'vs/base/common/buffer';
 import { Emitter, Event } from 'vs/base/common/event';
 import { Disposable } from 'vs/base/common/lifecycle';
 import { getExtensionForMimeType } from 'vs/base/common/mime';
-import { Schemas } from 'vs/base/common/network';
-import { isMacintosh } from 'vs/base/common/platform';
+import { FileAccess, Schemas } from 'vs/base/common/network';
+import { isMacintosh, isWeb } from 'vs/base/common/platform';
 import { dirname, joinPath } from 'vs/base/common/resources';
 import { URI } from 'vs/base/common/uri';
 import * as UUID from 'vs/base/common/uuid';
+import { TokenizationRegistry } from 'vs/editor/common/languages';
+import { generateTokensCSSForColorMap } from 'vs/editor/common/languages/supports/tokenization';
+import { tokenizeToString } from 'vs/editor/common/languages/textToHtmlTokenizer';
+import { ILanguageService } from 'vs/editor/common/services/language';
 import * as nls from 'vs/nls';
 import { createAndFillInContextMenuActions } from 'vs/platform/actions/browser/menuEntryActionViewItem';
 import { IMenuService, MenuId } from 'vs/platform/actions/common/actions';
@@ -22,12 +27,12 @@ import { IContextKeyService } from 'vs/platform/contextkey/common/contextkey';
 import { IContextMenuService } from 'vs/platform/contextview/browser/contextView';
 import { IFileDialogService } from 'vs/platform/dialogs/common/dialogs';
 import { IFileService } from 'vs/platform/files/common/files';
-import { IOpenerService, matchesScheme } from 'vs/platform/opener/common/opener';
+import { IOpenerService, matchesScheme, matchesSomeScheme } from 'vs/platform/opener/common/opener';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { IWorkspaceContextService } from 'vs/platform/workspace/common/workspace';
 import { IWorkspaceTrustManagementService } from 'vs/platform/workspace/common/workspaceTrust';
 import { asWebviewUri, webviewGenericCspSource } from 'vs/workbench/api/common/shared/webview';
-import { CellEditState, ICellOutputViewModel, ICommonCellInfo, ICommonNotebookEditorDelegate, IDisplayOutputLayoutUpdateRequest, IDisplayOutputViewModel, IGenericCellViewModel, IInsetRenderOutput, RenderOutputType } from 'vs/workbench/contrib/notebook/browser/notebookBrowser';
+import { CellEditState, ICellOutputViewModel, ICellViewModel, ICommonCellInfo, IDisplayOutputLayoutUpdateRequest, IDisplayOutputViewModel, IFocusNotebookCellOptions, IGenericCellViewModel, IInsetRenderOutput, INotebookEditorCreationOptions, INotebookWebviewMessage, RenderOutputType } from 'vs/workbench/contrib/notebook/browser/notebookBrowser';
 import { preloadsScriptStr, RendererMetadata } from 'vs/workbench/contrib/notebook/browser/view/renderers/webviewPreloads';
 import { transformWebviewThemeVars } from 'vs/workbench/contrib/notebook/browser/view/renderers/webviewThemeMapping';
 import { MarkupCellViewModel } from 'vs/workbench/contrib/notebook/browser/viewModel/markupCellViewModel';
@@ -35,9 +40,9 @@ import { INotebookRendererInfo, RendererMessagingSpec } from 'vs/workbench/contr
 import { INotebookKernel } from 'vs/workbench/contrib/notebook/common/notebookKernelService';
 import { IScopedRendererMessaging } from 'vs/workbench/contrib/notebook/common/notebookRendererMessagingService';
 import { INotebookService } from 'vs/workbench/contrib/notebook/common/notebookService';
-import { IWebviewService, WebviewContentPurpose, WebviewElement } from 'vs/workbench/contrib/webview/browser/webview';
+import { IWebviewElement, IWebviewService, WebviewContentPurpose } from 'vs/workbench/contrib/webview/browser/webview';
 import { IWorkbenchEnvironmentService } from 'vs/workbench/services/environment/common/environmentService';
-import { FromWebviewMessage, IAckOutputHeight, IClickedDataUrlMessage, IContentWidgetTopRequest, IControllerPreload, ICreationRequestMessage, IMarkupCellInitialization, ToWebviewMessage } from './webviewMessages';
+import { FromWebviewMessage, IAckOutputHeight, IClickedDataUrlMessage, IContentWidgetTopRequest, IControllerPreload, ICreationRequestMessage, IFindMatch, IMarkupCellInitialization, ToWebviewMessage } from './webviewMessages';
 
 export interface ICachedInset<K extends ICommonCellInfo> {
 	outputId: string;
@@ -46,25 +51,48 @@ export interface ICachedInset<K extends ICommonCellInfo> {
 	cachedCreation: ICreationRequestMessage;
 }
 
-function html(strings: TemplateStringsArray, ...values: any[]): string {
-	let str = '';
-	strings.forEach((string, i) => {
-		str += string + (values[i] || '');
-	});
-	return str;
-}
-
-export interface INotebookWebviewMessage {
-	message: unknown;
-}
-
 export interface IResolvedBackLayerWebview {
-	webview: WebviewElement;
+	webview: IWebviewElement;
+}
+
+/**
+ * Notebook Editor Delegate for back layer webview
+ */
+export interface INotebookDelegateForWebview {
+	readonly creationOptions: INotebookEditorCreationOptions;
+	getCellById(cellId: string): IGenericCellViewModel | undefined;
+	focusNotebookCell(cell: IGenericCellViewModel, focus: 'editor' | 'container' | 'output', options?: IFocusNotebookCellOptions): void;
+	toggleNotebookCellSelection(cell: IGenericCellViewModel, selectFromPrevious: boolean): void;
+	getCellByInfo(cellInfo: ICommonCellInfo): IGenericCellViewModel;
+	focusNextNotebookCell(cell: IGenericCellViewModel, focus: 'editor' | 'container' | 'output'): void;
+	updateOutputHeight(cellInfo: ICommonCellInfo, output: IDisplayOutputViewModel, height: number, isInit: boolean, source?: string): void;
+	scheduleOutputHeightAck(cellInfo: ICommonCellInfo, outputId: string, height: number): void;
+	updateMarkupCellHeight(cellId: string, height: number, isInit: boolean): void;
+	setMarkupCellEditState(cellId: string, editState: CellEditState): void;
+	didStartDragMarkupCell(cellId: string, event: { dragOffsetY: number; }): void;
+	didDragMarkupCell(cellId: string, event: { dragOffsetY: number; }): void;
+	didDropMarkupCell(cellId: string, event: { dragOffsetY: number, ctrlKey: boolean, altKey: boolean; }): void;
+	didEndDragMarkupCell(cellId: string): void;
+	setScrollTop(scrollTop: number): void;
+	triggerScroll(event: IMouseWheelEvent): void;
+}
+
+interface BacklayerWebviewOptions {
+	readonly outputNodePadding: number;
+	readonly outputNodeLeftPadding: number;
+	readonly previewNodePadding: number;
+	readonly markdownLeftMargin: number;
+	readonly leftMargin: number;
+	readonly rightMargin: number;
+	readonly runGutter: number;
+	readonly dragAndDropEnabled: boolean;
+	readonly fontSize: number;
+	readonly markupFontSize: number;
 }
 
 export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 	element: HTMLElement;
-	webview: WebviewElement | undefined = undefined;
+	webview: IWebviewElement | undefined = undefined;
 	insetMapping: Map<IDisplayOutputViewModel, ICachedInset<T>> = new Map();
 	readonly markupPreviewMapping = new Map<string, IMarkupCellInitialization>();
 	private hiddenInsetMapping: Set<IDisplayOutputViewModel> = new Set();
@@ -73,26 +101,17 @@ export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 	private readonly _onMessage = this._register(new Emitter<INotebookWebviewMessage>());
 	private readonly _preloadsCache = new Set<string>();
 	public readonly onMessage: Event<INotebookWebviewMessage> = this._onMessage.event;
+	private _initialized?: Promise<void>;
 	private _disposed = false;
 	private _currentKernel?: INotebookKernel;
 
 	private readonly nonce = UUID.generateUuid();
 
 	constructor(
-		public readonly notebookEditor: ICommonNotebookEditorDelegate,
+		public readonly notebookEditor: INotebookDelegateForWebview,
 		public readonly id: string,
 		public readonly documentUri: URI,
-		private options: {
-			outputNodePadding: number,
-			outputNodeLeftPadding: number,
-			previewNodePadding: number,
-			markdownLeftMargin: number,
-			leftMargin: number,
-			rightMargin: number,
-			runGutter: number,
-			dragAndDropEnabled: boolean,
-			fontSize: number
-		},
+		private options: BacklayerWebviewOptions,
 		private readonly rendererMessaging: IScopedRendererMessaging | undefined,
 		@IWebviewService readonly webviewService: IWebviewService,
 		@IOpenerService readonly openerService: IOpenerService,
@@ -107,6 +126,8 @@ export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 		@ITelemetryService private readonly telemetryService: ITelemetryService,
 		@IWorkspaceTrustManagementService private readonly workspaceTrustManagementService: IWorkspaceTrustManagementService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
+		@ILanguageService private readonly languageService: ILanguageService,
+		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
 	) {
 		super();
 
@@ -139,19 +160,16 @@ export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 				isTrusted: e,
 			});
 		}));
+
+		this._register(TokenizationRegistry.onDidChange(() => {
+			this._sendMessageToWebview({
+				type: 'tokenizedStylesChanged',
+				css: getTokenizationCss(),
+			});
+		}));
 	}
 
-	updateOptions(options: {
-		outputNodePadding: number,
-		outputNodeLeftPadding: number,
-		previewNodePadding: number,
-		markdownLeftMargin: number,
-		leftMargin: number,
-		rightMargin: number,
-		runGutter: number,
-		dragAndDropEnabled: boolean,
-		fontSize: number
-	}) {
+	updateOptions(options: BacklayerWebviewOptions) {
 		this.options = options;
 		this._updateStyles();
 		this._updateOptions();
@@ -179,10 +197,11 @@ export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 			'notebook-output-width': `calc(100% - ${this.options.leftMargin + this.options.rightMargin + this.options.runGutter}px)`,
 			'notebook-output-node-padding': `${this.options.outputNodePadding}px`,
 			'notebook-run-gutter': `${this.options.runGutter}px`,
-			'notebook-preivew-node-padding': `${this.options.previewNodePadding}px`,
+			'notebook-preview-node-padding': `${this.options.previewNodePadding}px`,
 			'notebook-markdown-left-margin': `${this.options.markdownLeftMargin}px`,
 			'notebook-output-node-left-padding': `${this.options.outputNodeLeftPadding}px`,
 			'notebook-markdown-min-height': `${this.options.previewNodePadding * 2}px`,
+			'notebook-markup-font-size': typeof this.options.markupFontSize === 'number' && this.options.markupFontSize > 0 ? `${this.options.markupFontSize}px` : `calc(${this.options.fontSize}px * 1.2)`,
 			'notebook-cell-output-font-size': `${this.options.fontSize}px`,
 			'notebook-cell-markup-empty-content': nls.localize('notebook.emptyMarkdownPlaceholder', "Empty markdown cell, double click or press enter to edit."),
 			'notebook-cell-renderer-not-found-error': nls.localize({
@@ -192,7 +211,7 @@ export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 		};
 	}
 
-	private generateContent(baseUrl: string) {
+	private generateContent(coreDependencies: string, baseUrl: string) {
 		const renderersData = this.getRendererData();
 		const preloadScript = preloadsScriptStr(
 			this.options,
@@ -202,7 +221,7 @@ export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 			this.nonce);
 
 		const enableCsp = this.configurationService.getValue('notebook.experimental.enableCsp');
-		return html`
+		return /* html */`
 		<html lang="en">
 			<head>
 				<meta charset="UTF-8">
@@ -218,6 +237,14 @@ export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 					child-src https: data:;
 				">` : ''}
 				<style nonce="${this.nonce}">
+					::highlight(find-highlight) {
+						background-color: var(--vscode-editor-findMatchHighlightBackground);
+					}
+
+					::highlight(current-find-highlight) {
+						background-color: var(--vscode-editor-findMatchBackground);
+					}
+
 					#container .cell_container {
 						width: 100%;
 					}
@@ -241,33 +268,36 @@ export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 					}
 
 					/* markdown */
-					#container > div.preview {
+					#container div.preview {
 						width: 100%;
-						padding-right: var(--notebook-preivew-node-padding);
+						padding-right: var(--notebook-preview-node-padding);
 						padding-left: var(--notebook-markdown-left-margin);
-						padding-top: var(--notebook-preivew-node-padding);
-						padding-bottom: var(--notebook-preivew-node-padding);
+						padding-top: var(--notebook-preview-node-padding);
+						padding-bottom: var(--notebook-preview-node-padding);
 
 						box-sizing: border-box;
 						white-space: nowrap;
 						overflow: hidden;
 						white-space: initial;
+
+						font-size: var(--notebook-markup-font-size);
 						color: var(--theme-ui-foreground);
 					}
 
-					#container > div.preview.draggable {
+					#container div.preview.draggable {
 						user-select: none;
 						-webkit-user-select: none;
 						-ms-user-select: none;
 						cursor: grab;
 					}
 
-					#container > div.preview.selected {
+					#container div.preview.selected {
 						background: var(--theme-notebook-cell-selected-background);
 					}
 
-					#container > div.preview.dragging {
+					#container div.preview.dragging {
 						background-color: var(--theme-background);
+						opacity: 0.5 !important;
 					}
 
 					.monaco-workbench.vs-dark .notebookOverlay .cell.markdown .latex img,
@@ -279,11 +309,11 @@ export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 						background-color: var(--theme-notebook-symbol-highlight-background);
 					}
 
-					#container > div.nb-cellDeleted {
+					#container > div.nb-cellDeleted .output_container {
 						background-color: var(--theme-notebook-diff-removed-background);
 					}
 
-					#container > div.nb-cellAdded {
+					#container > div.nb-cellAdded .output_container {
 						background-color: var(--theme-notebook-diff-inserted-background);
 					}
 
@@ -330,11 +360,31 @@ export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 						font-weight: normal;
 					}
 
+					.find-match {
+						background-color: var(--vscode-editor-findMatchHighlightBackground);
+					}
+
+					.current-find-match {
+						background-color: var(--vscode-editor-findMatchBackground);
+					}
+
+					#_defaultColorPalatte {
+						color: var(--vscode-editor-findMatchHighlightBackground);
+						background-color: var(--vscode-editor-findMatchBackground);
+					}
 				</style>
+				<style id="vscode-tokenization-styles" nonce="${this.nonce}">${getTokenizationCss()}</style>
 			</head>
 			<body style="overflow: hidden;">
+				<script>
+					self.require = {};
+				</script>
+				${coreDependencies}
+				<div id='findStart' tabIndex=-1></div>
+				<div id='container' class="widgetarea" style="position: absolute;width:100%;top: 0px"></div>
+				<script type="module">${preloadScript}</script>
 				<div id="container" class="widgetarea" style="position: absolute; width:100%; top: 0px"></div>
-				<script type="module" nonce="${this.nonce}">${preloadScript}</script>
+				<div id="_defaultColorPalatte"></div>
 			</body>
 		</html>`;
 	}
@@ -348,6 +398,7 @@ export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 				mimeTypes: renderer.mimeTypes,
 				extends: renderer.extends,
 				messaging: renderer.messaging !== RendererMessagingSpec.Never,
+				isBuiltin: renderer.isBuiltin
 			};
 		});
 	}
@@ -378,11 +429,85 @@ export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 		return !!this.webview;
 	}
 
-	createWebview(): void {
+	async createWebview(): Promise<void> {
 		const baseUrl = this.asWebviewUri(dirname(this.documentUri), undefined);
-		const htmlContent = this.generateContent(baseUrl.toString());
-		this._initialize(htmlContent);
-		return;
+
+		// Python notebooks assume that requirejs is a global.
+		// For all other notebooks, they need to provide their own loader.
+		if (!this.documentUri.path.toLowerCase().endsWith('.ipynb')) {
+			const htmlContent = this.generateContent('', baseUrl.toString());
+			this._initialize(htmlContent);
+			return;
+		}
+
+		let coreDependencies = '';
+		let resolveFunc: () => void;
+
+		this._initialized = new Promise<void>((resolve) => {
+			resolveFunc = resolve;
+		});
+
+		if (!isWeb) {
+			const loaderUri = FileAccess.asFileUri('vs/loader.js', require);
+			const loader = this.asWebviewUri(loaderUri, undefined);
+
+			coreDependencies = `<script src="${loader}"></script><script>
+			var requirejs = (function() {
+				return require;
+			}());
+			</script>`;
+			const htmlContent = this.generateContent(coreDependencies, baseUrl.toString());
+			this._initialize(htmlContent);
+			resolveFunc!();
+		} else {
+			const loaderUri = FileAccess.asBrowserUri('vs/loader.js', require);
+
+			fetch(loaderUri.toString(true)).then(async response => {
+				if (response.status !== 200) {
+					throw new Error(response.statusText);
+				}
+
+				const loaderJs = await response.text();
+
+				coreDependencies = `
+<script>
+${loaderJs}
+</script>
+<script>
+var requirejs = (function() {
+	return require;
+}());
+</script>
+`;
+
+				const htmlContent = this.generateContent(coreDependencies, baseUrl.toString());
+				this._initialize(htmlContent);
+				resolveFunc!();
+			}, error => {
+				// the fetch request is rejected
+				const htmlContent = this.generateContent(coreDependencies, baseUrl.toString());
+				this._initialize(htmlContent);
+				resolveFunc!();
+			});
+		}
+
+		await this._initialized;
+	}
+
+	private getBuiltinLocalResourceRoots(): URI[] {
+		// Python notebooks assume that requirejs is a global.
+		// For all other notebooks, they need to provide their own loader.
+		if (!this.documentUri.path.toLowerCase().endsWith('.ipynb')) {
+			return [];
+		}
+
+		if (isWeb) {
+			return []; // script is inlined
+		}
+
+		return [
+			dirname(FileAccess.asFileUri('vs/loader.js', require)),
+		];
 	}
 
 	private _initialize(content: string) {
@@ -407,7 +532,7 @@ export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 				console.warn('Command links are deprecated and will be removed, use messag passing instead: https://github.com/microsoft/vscode/issues/123601');
 			}
 
-			if (matchesScheme(link, Schemas.http) || matchesScheme(link, Schemas.https) || matchesScheme(link, Schemas.mailto)
+			if (matchesScheme(link, Schemas.vscodeNotebookCell) || matchesScheme(link, Schemas.http) || matchesScheme(link, Schemas.https) || matchesScheme(link, Schemas.mailto)
 				|| matchesScheme(link, Schemas.command)) {
 				this.openerService.open(link, { fromUserGesture: true, allowContributedOpeners: true, allowCommands: true });
 			}
@@ -526,6 +651,42 @@ export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 						this._onDidClickDataLink(data);
 						break;
 					}
+				case 'clicked-link':
+					{
+						let linkToOpen: URI | string | undefined;
+						if (matchesSomeScheme(data.href, Schemas.http, Schemas.https, Schemas.mailto, Schemas.command, Schemas.vscodeNotebookCell, Schemas.vscodeNotebook, Schemas.file)) {
+							linkToOpen = data.href;
+						} else if (!/^[\w\-]+:/.test(data.href)) {
+							if (this.documentUri.scheme === Schemas.untitled) {
+								const folders = this.workspaceContextService.getWorkspace().folders;
+								if (!folders.length) {
+									return;
+								}
+								linkToOpen = URI.joinPath(folders[0].uri, data.href);
+							} else {
+								if (data.href.startsWith('/')) {
+									// Resolve relative to workspace
+									let folder = this.workspaceContextService.getWorkspaceFolder(this.documentUri);
+									if (!folder) {
+										const folders = this.workspaceContextService.getWorkspace().folders;
+										if (!folders.length) {
+											return;
+										}
+										folder = folders[0];
+									}
+									linkToOpen = URI.joinPath(folder.uri, data.href);
+								} else {
+									// Resolve relative to notebook document
+									linkToOpen = URI.joinPath(dirname(this.documentUri), data.href);
+								}
+							}
+						}
+
+						if (linkToOpen) {
+							this.openerService.open(linkToOpen, { fromUserGesture: true, allowCommands: true });
+						}
+						break;
+					}
 				case 'customKernelMessage':
 					{
 						this._onMessage.fire({ message: data.message });
@@ -630,6 +791,25 @@ export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 						if (cell instanceof MarkupCellViewModel) {
 							cell.renderedHtml = data.html;
 						}
+
+						for (const { id, value, lang } of data.codeBlocks) {
+							// The language id may be a language aliases (e.g.js instead of javascript)
+							const languageId = this.languageService.getLanguageIdByLanguageName(lang);
+							if (!languageId) {
+								continue;
+							}
+
+							tokenizeToString(this.languageService, value, languageId).then((html) => {
+								if (this._disposed) {
+									return;
+								}
+								this._sendMessageToWebview({
+									type: 'tokenizedCodeBlock',
+									html,
+									codeBlockId: id
+								});
+							});
+						}
 						break;
 					}
 				case 'telemetryFoundRenderedMarkdownMath':
@@ -684,13 +864,7 @@ export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 			return;
 		}
 
-		const decoded = atob(splitData);
-		const typedArray = new Uint8Array(decoded.length);
-		for (let i = 0; i < decoded.length; i++) {
-			typedArray[i] = decoded.charCodeAt(i);
-		}
-
-		const buff = VSBuffer.wrap(typedArray);
+		const buff = decodeBase64(splitData);
 		await this.fileService.writeFile(newFileUri, buff);
 		await this.openerService.open(newFileUri);
 	}
@@ -702,8 +876,8 @@ export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 			...this.notebookService.getNotebookProviderResourceRoots(),
 			...this.notebookService.getRenderers().map(x => dirname(x.entrypoint)),
 			...workspaceFolders,
+			...this.getBuiltinLocalResourceRoots(),
 		];
-
 		const webview = webviewService.createWebviewElement(this.id, {
 			purpose: WebviewContentPurpose.NotebookRenderer,
 			enableFindWidget: false,
@@ -713,7 +887,7 @@ export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 			allowScripts: true,
 			localResourceRoots: this.localResourceRootsCache,
 		}, undefined);
-		// console.log(this.localResourceRootsCache);
+
 		webview.html = content;
 		return webview;
 	}
@@ -747,7 +921,7 @@ export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 			return false;
 		}
 
-		if (cell.metadata.outputCollapsed) {
+		if ('isOutputCollapsed' in cell && (cell as ICellViewModel).isOutputCollapsed) {
 			return false;
 		}
 
@@ -1113,6 +1287,63 @@ export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 		}, 50);
 	}
 
+	async find(query: string, options: { wholeWord?: boolean; caseSensitive?: boolean; includeMarkup: boolean; includeOutput: boolean; }): Promise<IFindMatch[]> {
+		if (query === '') {
+			return [];
+		}
+
+		const p = new Promise<IFindMatch[]>(resolve => {
+			const sub = this.webview?.onMessage(e => {
+				if (e.message.type === 'didFind') {
+					resolve(e.message.matches);
+					sub?.dispose();
+				}
+			});
+		});
+
+		this._sendMessageToWebview({
+			type: 'find',
+			query: query,
+			options
+		});
+
+		const ret = await p;
+		return ret;
+	}
+
+	findStop() {
+		this._sendMessageToWebview({
+			type: 'findStop'
+		});
+	}
+
+	async findHighlight(index: number): Promise<number> {
+		const p = new Promise<number>(resolve => {
+			const sub = this.webview?.onMessage(e => {
+				if (e.message.type === 'didFindHighlight') {
+					resolve(e.message.offset);
+					sub?.dispose();
+				}
+			});
+		});
+
+		this._sendMessageToWebview({
+			type: 'findHighlight',
+			index
+		});
+
+		const ret = await p;
+		return ret;
+	}
+
+	async findUnHighlight(index: number): Promise<void> {
+		this._sendMessageToWebview({
+			type: 'findUnHighlight',
+			index
+		});
+	}
+
+
 	deltaCellOutputContainerClassNames(cellId: string, added: string[], removed: string[]) {
 		this._sendMessageToWebview({
 			type: 'decorations',
@@ -1193,3 +1424,10 @@ export class BackLayerWebView<T extends ICommonCellInfo> extends Disposable {
 		super.dispose();
 	}
 }
+
+function getTokenizationCss() {
+	const colorMap = TokenizationRegistry.getColorMap();
+	const tokenizationCss = colorMap ? generateTokensCSSForColorMap(colorMap) : '';
+	return tokenizationCss;
+}
+

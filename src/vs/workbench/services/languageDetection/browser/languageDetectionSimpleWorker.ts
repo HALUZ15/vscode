@@ -7,13 +7,13 @@ import type { ModelOperations, ModelResult } from '@vscode/vscode-languagedetect
 import { StopWatch } from 'vs/base/common/stopwatch';
 import { IRequestHandler } from 'vs/base/common/worker/simpleWorker';
 import { EditorSimpleWorker } from 'vs/editor/common/services/editorSimpleWorker';
-import { EditorWorkerHost } from 'vs/editor/common/services/editorWorkerServiceImpl';
+import { IEditorWorkerHost } from 'vs/editor/common/services/editorWorkerHost';
 
 /**
  * Called on the worker side
  * @internal
  */
-export function create(host: EditorWorkerHost): IRequestHandler {
+export function create(host: IEditorWorkerHost): IRequestHandler {
 	return new LanguageDetectionSimpleWorker(host, null);
 }
 
@@ -92,7 +92,7 @@ export class LanguageDetectionSimpleWorker extends EditorSimpleWorker {
 			case 'php':
 				modelResult.confidence += LanguageDetectionSimpleWorker.positiveConfidenceCorrectionBucket1;
 				break;
-			case 'yaml':
+			// case 'yaml': // YAML has been know to cause incorrect language detection because the language is pretty simple. We don't want to increase the confidence for this.
 			case 'cpp':
 			case 'shellscript':
 			case 'java':
